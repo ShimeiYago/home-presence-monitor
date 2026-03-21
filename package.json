@@ -1,0 +1,16 @@
+{
+  "name": "nightreign-char-selector",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "services/*",
+    "cdk"
+  ],
+  "scripts": {
+    "dev:front": "npm --prefix services/front run dev",
+    "build:front": "npm --prefix services/front run build",
+    "shadcn:add": "npm --prefix services/front run shadcn:add",
+    "deploy:cdk": "npm run build:front && npm --workspace cdk run deploy",
+    "destroy:cdk": "npm --workspace cdk exec -- npx aws-cdk destroy"
+  }
+}
