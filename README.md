@@ -18,8 +18,28 @@ Running commands from the root keeps the lockfile consistent and avoids manually
 
 ## Development
 
-- Start the frontend dev server with `npm run dev:front` (Next.js runs inside `front/`).
-- Scaffold UI components via `npm run shadcn:add -- button` (replace `button` with any supported components name).
+- フロントエンド: `npm run dev:front`
+- API サーバー: `npm run dev:api`
+
+### Backend local dev (DynamoDB Local)
+
+ローカルでは DynamoDB Local (Docker) を起動し、API からは `DYNAMODB_ENDPOINT` で接続します。
+
+```sh
+docker compose -f packages/db/ddb.local.yaml up
+```
+
+テーブル作成（スキーマ駆動）↓
+
+```sh
+npm run ddb:local:bootstrap
+```
+
+なお、`http://localhost:8001/` にアクセスすることで、DynamoDB Local の中身をGUIで操作できる。
+
+### UI コンポーネント追加
+
+- `npm run shadcn:add:front -- button`
 
 ## Deployment
 

@@ -10,10 +10,11 @@
     "prepare": "husky",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "npm --workspaces --if-present run typecheck",
+    "typecheck": "npm -w --if-present run typecheck",
     "dev:front": "npm -w services/front run dev",
     "build:front": "npm -w services/front run build",
     "shadcn:add": "npm -w services/front run shadcn:add",
+    "dev:api": "npm -w services/api run dev",
     "deploy:cdk": "npm run build:front && npm -w cdk run deploy",
     "destroy:cdk": "npm -w cdk exec -- npx aws-cdk destroy"
   },
