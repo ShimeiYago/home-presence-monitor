@@ -15,6 +15,7 @@
     "dev:front": "npm -w services/front run dev",
     "build:front": "npm -w services/front run build",
     "shadcn:add": "npm -w services/front run shadcn:add",
+    "shadcn:add:front": "npm -w services/front run shadcn:add",
     "dev:api": "npm -w services/api run dev",
     "ddb:local:bootstrap": "npm -w packages/db run ddb:local:bootstrap",
     "deploy:cdk": "npm run build:front && npm -w cdk run deploy",
