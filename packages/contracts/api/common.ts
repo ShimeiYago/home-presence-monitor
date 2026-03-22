@@ -1,0 +1,1 @@
+export type ISO8601 = string // "2026-03-21T10:05:00Z"
