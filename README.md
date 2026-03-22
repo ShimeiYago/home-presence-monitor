@@ -26,7 +26,7 @@ Running commands from the root keeps the lockfile consistent and avoids manually
 ローカルでは DynamoDB Local (Docker) を起動し、API からは `DYNAMODB_ENDPOINT` で接続します。
 
 ```sh
-docker compose -f packages/db/ddb.local.yaml up
+docker compose -f packages/db/ddb.local.yaml up -d
 ```
 
 テーブル作成（スキーマ駆動）↓

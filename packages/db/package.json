@@ -1,5 +1,5 @@
 {
-  "name": "@monitoria/db",
+  "name": "@home-presence-monitor/db",
   "version": "1.0.0",
   "private": true,
   "type": "commonjs",

@@ -4,11 +4,11 @@ import {
   GetLatestHeartbeatResponse,
   PostHeartbeatRequest,
   PostHeartbeatResponse,
-} from "@homePresenceMonitor/contracts/api";
+} from "@home-presence-monitor/contracts/api";
 import {
   putHeartbeat,
   queryLatestHeartbeatByDevice,
-} from "@homePresenceMonitor/db/schema/heartbeats";
+} from "@home-presence-monitor/db/schema/heartbeats";
 import { notFound } from "src/app/lib/errors";
 import { parseJsonBody, parseParams } from "src/app/lib/zod";
 import { deviceParamsSchema } from "./common";

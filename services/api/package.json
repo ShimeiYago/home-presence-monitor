@@ -18,7 +18,7 @@
     "@aws-sdk/client-dynamodb": "^3.952.0",
     "@aws-sdk/lib-dynamodb": "^3.952.0",
     "@hono/node-server": "^1.19.7",
-    "@homePresenceMonitor/db": "file:../../packages/db",
+    "@home-presence-monitor/db": "file:../../packages/db",
     "dotenv": "^17.2.3",
     "dynamodb-toolbox": "^2.7.2",
     "hono": "^4.11.1",

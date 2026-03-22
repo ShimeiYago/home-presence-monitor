@@ -4,11 +4,11 @@ import {
   GetActivitiesResponse,
   PostActivityRequest,
   PostActivityResponse,
-} from "@homePresenceMonitor/contracts/api";
+} from "@home-presence-monitor/contracts/api";
 import {
   putActivity,
   queryActivitiesByDeviceAndRange,
-} from "@homePresenceMonitor/db/schema/activities";
+} from "@home-presence-monitor/db/schema/activities";
 import { badRequest } from "src/app/lib/errors";
 import { parseJsonBody, parseParams, parseQuery } from "src/app/lib/zod";
 import { deviceParamsSchema } from "./common";

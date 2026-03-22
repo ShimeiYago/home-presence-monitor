@@ -65,4 +65,5 @@ export type DdbTableSchemaKey = keyof typeof ddbTableSchemas;
 export const buildDdbTableName = (
   env: string,
   schemaKey: DdbTableSchemaKey,
-): string => `Monitoria-${env}-${ddbTableSchemas[schemaKey].nameSuffix}`;
+): string =>
+  `HomePresenceMonitor-${env}-${ddbTableSchemas[schemaKey].nameSuffix}`;
