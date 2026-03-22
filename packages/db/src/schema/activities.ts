@@ -41,7 +41,9 @@ const parseWindowStartFromSk = (sk: string): string | undefined => {
   return match?.[1];
 };
 
-export const parseActivityRecord = (item: unknown): ActivityRecord | undefined => {
+export const parseActivityRecord = (
+  item: unknown,
+): ActivityRecord | undefined => {
   if (!isRecord(item)) {
     return undefined;
   }

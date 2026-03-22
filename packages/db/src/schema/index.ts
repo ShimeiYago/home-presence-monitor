@@ -52,7 +52,7 @@ export const ddbTableSchemas = {
     keySchema: { partitionKey: "PK", sortKey: "SK" },
     ttlEnabled: true,
     billingMode: "PAY_PER_REQUEST",
-  }
+  },
 } as const satisfies Record<string, DdbTableSchema>;
 
 export const resolveDdbAttributeType = (

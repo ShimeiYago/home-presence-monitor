@@ -51,7 +51,14 @@ export const parseHeartbeatRecord = (
   const createdAt = readString(item, "createdAt");
   const ttl = readNumber(item, "ttl");
 
-  if (!pk || !sk || !deviceId || !timestamp || !createdAt || ttl === undefined) {
+  if (
+    !pk ||
+    !sk ||
+    !deviceId ||
+    !timestamp ||
+    !createdAt ||
+    ttl === undefined
+  ) {
     return undefined;
   }
 

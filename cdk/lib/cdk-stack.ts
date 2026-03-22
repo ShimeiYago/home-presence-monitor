@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 
 import {
   aws_certificatemanager as acm,
@@ -14,11 +14,18 @@ import {
   RemovalPolicy,
   Stack,
   StackProps,
-} from 'aws-cdk-lib';
-import { Construct } from 'constructs';
-import { SiteConfig } from '../site-config';
+} from "aws-cdk-lib";
+import { Construct } from "constructs";
+import { SiteConfig } from "../site-config";
 
-const SITE_BUILD_PATH = resolve(__dirname, '..', '..', 'services', 'front', 'out');
+const SITE_BUILD_PATH = resolve(
+  __dirname,
+  "..",
+  "..",
+  "services",
+  "front",
+  "out",
+);
 
 interface SiteStackProps extends StackProps {
   siteConfig: SiteConfig;
@@ -28,7 +35,8 @@ export class CdkStack extends Stack {
   constructor(scope: Construct, id: string, props: SiteStackProps) {
     super(scope, id, props);
 
-    const { domainName, hostedZoneDomain, certificateArn, siteNameKey } = props.siteConfig;
+    const { domainName, hostedZoneDomain, certificateArn, siteNameKey } =
+      props.siteConfig;
     const hasCustomDomain = Boolean(domainName && hostedZoneDomain);
 
     if (hasCustomDomain && !domainName!.endsWith(hostedZoneDomain!)) {
@@ -44,12 +52,12 @@ export class CdkStack extends Stack {
     }
 
     const hostedZone = hasCustomDomain
-      ? route53.HostedZone.fromLookup(this, 'HostedZone', {
+      ? route53.HostedZone.fromLookup(this, "HostedZone", {
           domainName: hostedZoneDomain!,
         })
       : undefined;
 
-    const siteBucket = new s3.Bucket(this, 'SiteBucket', {
+    const siteBucket = new s3.Bucket(this, "SiteBucket", {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
@@ -58,22 +66,30 @@ export class CdkStack extends Stack {
       autoDeleteObjects: false,
     });
 
-    const originAccessIdentity = new cloudfront.OriginAccessIdentity(this, 'SiteOAI', {
-      comment: `Access identity for ${domainName ?? siteNameKey}`,
-    });
+    const originAccessIdentity = new cloudfront.OriginAccessIdentity(
+      this,
+      "SiteOAI",
+      {
+        comment: `Access identity for ${domainName ?? siteNameKey}`,
+      },
+    );
     siteBucket.grantRead(originAccessIdentity);
 
     const certificate = hasCustomDomain
       ? certificateArn
-        ? acm.Certificate.fromCertificateArn(this, 'ImportedCertificate', certificateArn)
-        : new acm.DnsValidatedCertificate(this, 'SiteCertificate', {
+        ? acm.Certificate.fromCertificateArn(
+            this,
+            "ImportedCertificate",
+            certificateArn,
+          )
+        : new acm.DnsValidatedCertificate(this, "SiteCertificate", {
             domainName: domainName!,
             hostedZone: hostedZone!,
-            region: 'us-east-1',
+            region: "us-east-1",
           })
       : undefined;
 
-    const cleanUrlFunction = new cloudfront.Function(this, 'CleanUrlFunction', {
+    const cleanUrlFunction = new cloudfront.Function(this, "CleanUrlFunction", {
       code: cloudfront.FunctionCode.fromInline(`function handler(event) {
   var request = event.request;
   var uri = request.uri || '/';
@@ -94,9 +110,9 @@ export class CdkStack extends Stack {
 }`),
     });
 
-    const distribution = new cloudfront.Distribution(this, 'SiteDistribution', {
+    const distribution = new cloudfront.Distribution(this, "SiteDistribution", {
       comment: siteNameKey,
-      defaultRootObject: 'index.html',
+      defaultRootObject: "index.html",
       domainNames: hasCustomDomain ? [domainName!] : undefined,
       certificate: hasCustomDomain ? certificate : undefined,
       minimumProtocolVersion: hasCustomDomain
@@ -120,46 +136,47 @@ export class CdkStack extends Stack {
         {
           httpStatus: 404,
           responseHttpStatus: 404,
-          responsePagePath: '/404.html',
+          responsePagePath: "/404.html",
           ttl: Duration.minutes(5),
         },
       ],
     });
 
     if (hasCustomDomain) {
-      const recordName = domainName === hostedZoneDomain
-        ? undefined
-        : domainName!.replace(`.${hostedZoneDomain}`, '');
+      const recordName =
+        domainName === hostedZoneDomain
+          ? undefined
+          : domainName!.replace(`.${hostedZoneDomain}`, "");
 
       const aliasTarget = route53.RecordTarget.fromAlias(
         new route53Targets.CloudFrontTarget(distribution),
       );
 
-      new route53.ARecord(this, 'SiteAliasRecord', {
+      new route53.ARecord(this, "SiteAliasRecord", {
         zone: hostedZone!,
         recordName,
         target: aliasTarget,
       });
 
-      new route53.AaaaRecord(this, 'SiteAliasRecordIpv6', {
+      new route53.AaaaRecord(this, "SiteAliasRecordIpv6", {
         zone: hostedZone!,
         recordName,
         target: aliasTarget,
       });
     }
 
-    new s3deploy.BucketDeployment(this, 'StaticSiteDeployment', {
+    new s3deploy.BucketDeployment(this, "StaticSiteDeployment", {
       sources: [s3deploy.Source.asset(SITE_BUILD_PATH)],
       destinationBucket: siteBucket,
       distribution,
-      distributionPaths: ['/*'],
+      distributionPaths: ["/*"],
     });
 
-    new CfnOutput(this, 'CloudFrontDomain', {
+    new CfnOutput(this, "CloudFrontDomain", {
       value: distribution.distributionDomainName,
     });
 
-    new CfnOutput(this, 'SiteBucketName', {
+    new CfnOutput(this, "SiteBucketName", {
       value: siteBucket.bucketName,
     });
   }

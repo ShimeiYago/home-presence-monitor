@@ -5,7 +5,6 @@ import { errorHandler, notFoundHandler } from "./middleware/error-handler";
 import { devicesRoute } from "./routes/v1/devices";
 import { healthRoute } from "./routes/healthz";
 
-
 type AppContext = {
   Variables: {
     requestId: string;

@@ -15,8 +15,10 @@
     "types": ["node", "aws-lambda"],
     "baseUrl": "./",
     "paths": {
-      "@homePresenceMonitor/contracts/api": ["../../packages/contracts/api/index.ts"],
-      "@homePresenceMonitor/db/*": ["../../packages/db/src/*"],
+      "@homePresenceMonitor/contracts/api": [
+        "../../packages/contracts/api/index.ts"
+      ],
+      "@homePresenceMonitor/db/*": ["../../packages/db/src/*"]
     }
   },
   "include": [
