@@ -64,7 +64,7 @@ export const createApp = () => {
         }
         return allowedOrigins.includes(origin) ? origin : undefined;
       },
-      allowHeaders: ["Content-Type", "Authorization"],
+      allowHeaders: ["Content-Type", "Authorization", "x-api-key"],
       allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       credentials: true,
     }),

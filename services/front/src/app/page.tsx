@@ -45,7 +45,42 @@ type ApiErrorShape = {
   };
 };
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "");
+type RuntimeConfig = {
+  NEXT_PUBLIC_API_BASE_URL?: string;
+  NEXT_PUBLIC_API_KEY?: string;
+};
+type ApiConfig = {
+  apiBaseUrl?: string;
+  apiKey?: string;
+};
+
+const readRuntimeConfig = (): RuntimeConfig => {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  return (
+    (window as Window & { __HPM_RUNTIME_CONFIG__?: RuntimeConfig })
+      .__HPM_RUNTIME_CONFIG__ ?? {}
+  );
+};
+
+const resolveApiConfig = (): ApiConfig => {
+  const runtimeConfig = readRuntimeConfig();
+  const apiBaseUrl = (
+    runtimeConfig.NEXT_PUBLIC_API_BASE_URL ??
+    process.env.NEXT_PUBLIC_API_BASE_URL
+  )?.replace(/\/+$/, "");
+  const apiKey = (
+    runtimeConfig.NEXT_PUBLIC_API_KEY ?? process.env.NEXT_PUBLIC_API_KEY
+  )?.trim();
+
+  return {
+    apiBaseUrl,
+    apiKey: apiKey && apiKey.length > 0 ? apiKey : undefined,
+  };
+};
+
 const PRESET_HOURS: Record<PresetKey, number> = {
   "1h": 1,
   "6h": 6,
@@ -81,6 +116,7 @@ const parseErrorMessage = async (response: Response): Promise<string> => {
 
 const fetchActivities = async (
   baseUrl: string,
+  apiKey: string,
   deviceId: string,
   range: TimeRange,
 ): Promise<GetActivitiesResponse> => {
@@ -91,7 +127,13 @@ const fetchActivities = async (
 
   const response = await fetch(
     `${baseUrl}/v1/devices/${encodeURIComponent(deviceId)}/activities?${params.toString()}`,
-    { method: "GET", cache: "no-store" },
+    {
+      method: "GET",
+      cache: "no-store",
+      headers: {
+        "x-api-key": apiKey,
+      },
+    },
   );
 
   if (!response.ok) {
@@ -103,11 +145,18 @@ const fetchActivities = async (
 
 const fetchLatestHeartbeat = async (
   baseUrl: string,
+  apiKey: string,
   deviceId: string,
 ): Promise<GetLatestHeartbeatResponse | null> => {
   const response = await fetch(
     `${baseUrl}/v1/devices/${encodeURIComponent(deviceId)}/heartbeats/latest`,
-    { method: "GET", cache: "no-store" },
+    {
+      method: "GET",
+      cache: "no-store",
+      headers: {
+        "x-api-key": apiKey,
+      },
+    },
   );
 
   if (response.status === 404) {
@@ -136,15 +185,27 @@ export default function Home() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [apiConfig, setApiConfig] = useState<ApiConfig>(() =>
+    resolveApiConfig(),
+  );
 
   const totalMotionCount = useMemo(
     () => activities.reduce((sum, row) => sum + row.motionCount, 0),
     [activities],
   );
+  const isApiConfigured = Boolean(apiConfig.apiBaseUrl && apiConfig.apiKey);
+
+  useEffect(() => {
+    setApiConfig(resolveApiConfig());
+  }, []);
 
   const refresh = useCallback(async () => {
-    if (!API_BASE_URL) {
+    if (!apiConfig.apiBaseUrl) {
       setErrorMessage("NEXT_PUBLIC_API_BASE_URL が設定されていません。");
+      return;
+    }
+    if (!apiConfig.apiKey) {
+      setErrorMessage("NEXT_PUBLIC_API_KEY が設定されていません。");
       return;
     }
     if (!selectedDevice) {
@@ -158,8 +219,17 @@ export default function Home() {
     setIsLoading(true);
 
     const [activitiesResult, heartbeatResult] = await Promise.allSettled([
-      fetchActivities(API_BASE_URL, selectedDevice, range),
-      fetchLatestHeartbeat(API_BASE_URL, selectedDevice),
+      fetchActivities(
+        apiConfig.apiBaseUrl,
+        apiConfig.apiKey,
+        selectedDevice,
+        range,
+      ),
+      fetchLatestHeartbeat(
+        apiConfig.apiBaseUrl,
+        apiConfig.apiKey,
+        selectedDevice,
+      ),
     ]);
 
     const errors: string[] = [];
@@ -189,7 +259,7 @@ export default function Home() {
     }
 
     setIsLoading(false);
-  }, [selectedDevice, selectedPreset]);
+  }, [apiConfig.apiBaseUrl, apiConfig.apiKey, selectedDevice, selectedPreset]);
 
   useEffect(() => {
     void refresh();
@@ -203,15 +273,19 @@ export default function Home() {
             活動検知モニター
           </h1>
           <p className="text-sm text-slate-600">
-            API: {API_BASE_URL ?? "未設定"}
+            API: {apiConfig.apiBaseUrl ?? "未設定"}
+          </p>
+          <p className="text-sm text-slate-600">
+            API Key: {apiConfig.apiKey ? "設定済み" : "未設定"}
           </p>
         </header>
 
-        {!API_BASE_URL && (
+        {!isApiConfigured && (
           <Alert variant="destructive">
             <AlertTitle>API設定エラー</AlertTitle>
             <AlertDescription>
-              環境変数 `NEXT_PUBLIC_API_BASE_URL` を設定してください。
+              `NEXT_PUBLIC_API_BASE_URL` / `NEXT_PUBLIC_API_KEY` または
+              `/runtime-config.js` を設定してください。
             </AlertDescription>
           </Alert>
         )}
@@ -273,7 +347,7 @@ export default function Home() {
 
             <Button
               onClick={() => void refresh()}
-              disabled={isLoading || !API_BASE_URL}
+              disabled={isLoading || !isApiConfigured}
             >
               <RefreshCw className={isLoading ? "animate-spin" : ""} />
               更新
