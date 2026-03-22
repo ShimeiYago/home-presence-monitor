@@ -1,7 +1,13 @@
 #!/usr/bin/env node
+import { config as loadDotenv } from "dotenv";
+import { resolve } from "node:path";
 import * as cdk from "aws-cdk-lib";
 import { loadSiteConfig } from "../site-config";
 import { CdkStack } from "../lib/cdk-stack";
+
+loadDotenv({
+  path: resolve(__dirname, "..", ".env"),
+});
 
 const app = new cdk.App();
 

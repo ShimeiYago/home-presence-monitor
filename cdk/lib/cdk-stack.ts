@@ -136,6 +136,20 @@ export class CdkStack extends Stack {
       );
     }
 
+    const basicAuthUsername = process.env.CLOUDFRONT_BASIC_AUTH_USERNAME;
+    const basicAuthPassword = process.env.CLOUDFRONT_BASIC_AUTH_PASSWORD;
+
+    if (!basicAuthUsername || !basicAuthPassword) {
+      throw new Error(
+        "CLOUDFRONT_BASIC_AUTH_USERNAME and CLOUDFRONT_BASIC_AUTH_PASSWORD must be set (recommended: cdk/.env) before CDK synth/deploy.",
+      );
+    }
+
+    const expectedAuthorizationHeader = `Basic ${Buffer.from(
+      `${basicAuthUsername}:${basicAuthPassword}`,
+      "utf8",
+    ).toString("base64")}`;
+
     const hostedZone = hasCustomDomain
       ? route53.HostedZone.fromLookup(this, "HostedZone", {
           domainName: hostedZoneDomain!,
@@ -177,6 +191,26 @@ export class CdkStack extends Stack {
     const cleanUrlFunction = new cloudfront.Function(this, "CleanUrlFunction", {
       code: cloudfront.FunctionCode.fromInline(`function handler(event) {
   var request = event.request;
+  var headers = request.headers || {};
+  var authorizationHeader =
+    headers.authorization && headers.authorization.value;
+  var expectedAuthorizationHeader = ${JSON.stringify(expectedAuthorizationHeader)};
+
+  if (authorizationHeader !== expectedAuthorizationHeader) {
+    return {
+      statusCode: 401,
+      statusDescription: 'Unauthorized',
+      headers: {
+        'www-authenticate': {
+          value: 'Basic realm="HomePresenceMonitor"'
+        },
+        'cache-control': {
+          value: 'no-store'
+        }
+      }
+    };
+  }
+
   var uri = request.uri || '/';
 
   if (!uri.includes('.')) {
@@ -441,6 +475,7 @@ export class CdkStack extends Stack {
       }),
       ";\n",
     ]);
+    const runtimeConfigRevision = `${Date.now()}`;
 
     const runtimeConfigWriter = new cr.AwsCustomResource(
       this,
@@ -455,6 +490,9 @@ export class CdkStack extends Stack {
             Body: runtimeConfigBody,
             ContentType: "application/javascript; charset=utf-8",
             CacheControl: "no-store, max-age=0",
+            Metadata: {
+              revision: runtimeConfigRevision,
+            },
           },
           physicalResourceId: cr.PhysicalResourceId.fromResponse("ETag"),
         },
@@ -467,6 +505,9 @@ export class CdkStack extends Stack {
             Body: runtimeConfigBody,
             ContentType: "application/javascript; charset=utf-8",
             CacheControl: "no-store, max-age=0",
+            Metadata: {
+              revision: runtimeConfigRevision,
+            },
           },
           physicalResourceId: cr.PhysicalResourceId.fromResponse("ETag"),
         },
