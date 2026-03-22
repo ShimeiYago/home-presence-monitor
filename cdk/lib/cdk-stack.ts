@@ -20,6 +20,7 @@ import {
   RemovalPolicy,
   Stack,
   StackProps,
+  Tags,
   custom_resources as cr,
 } from "aws-cdk-lib";
 import { Construct } from "constructs";
@@ -113,6 +114,7 @@ const buildDdbAttribute = (
 export class CdkStack extends Stack {
   constructor(scope: Construct, id: string, props: SiteStackProps) {
     super(scope, id, props);
+    Tags.of(this).add("Product", "home-presence-monitor");
 
     const { domainName, hostedZoneDomain, certificateArn, siteNameKey } =
       props.siteConfig;
