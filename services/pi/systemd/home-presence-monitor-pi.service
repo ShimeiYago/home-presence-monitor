@@ -1,0 +1,17 @@
+[Unit]
+Description=Home Presence Monitor (Raspberry Pi motion sender)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=admin
+Group=admin
+WorkingDirectory=/home/admin/home-presence-monitor
+EnvironmentFile=/home/admin/home-presence-monitor/.env
+ExecStart=/home/admin/home-presence-monitor/.venv/bin/python /home/admin/home-presence-monitor/monitor.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
