@@ -1,25 +1,53 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import {
+  GetHeartbeatsResponse,
   GetLatestHeartbeatResponse,
   PostHeartbeatRequest,
   PostHeartbeatResponse,
 } from "@home-presence-monitor/contracts/api";
 import {
+  queryHeartbeatsByDeviceAndRange,
   putHeartbeat,
   queryLatestHeartbeatByDevice,
 } from "@home-presence-monitor/db/schema/heartbeats";
-import { notFound } from "src/app/lib/errors";
-import { parseJsonBody, parseParams } from "src/app/lib/zod";
+import { badRequest, notFound } from "src/app/lib/errors";
+import { parseJsonBody, parseParams, parseQuery } from "src/app/lib/zod";
 import { deviceParamsSchema } from "./common";
 
 export const deviceHeartbeatsRoute = new Hono();
 const HEARTBEAT_TTL_SECONDS = 60 * 60 * 24;
+const iso8601Schema = z.string().datetime({ offset: true });
+const getHeartbeatsQuerySchema = z.object({
+  from: iso8601Schema,
+  to: iso8601Schema,
+});
 const postHeartbeatRequestSchema = z.object({
   timestamp: z.string().datetime({ offset: true }),
 });
 const toTtlEpoch = (createdAt: string, ttlSeconds: number): number =>
   Math.floor(Date.parse(createdAt) / 1000) + ttlSeconds;
+
+deviceHeartbeatsRoute.get("/", async (c) => {
+  const { deviceId } = parseParams(c, deviceParamsSchema);
+  const { from, to } = parseQuery(c, getHeartbeatsQuerySchema);
+
+  if (from > to) {
+    throw badRequest("from must be less than or equal to to");
+  }
+
+  const records = await queryHeartbeatsByDeviceAndRange({ deviceId, from, to });
+
+  return c.json<GetHeartbeatsResponse>(
+    {
+      deviceId,
+      heartbeats: records.map((record) => ({
+        timestamp: record.timestamp,
+      })),
+    },
+    200,
+  );
+});
 
 deviceHeartbeatsRoute.get("/latest", async (c) => {
   const { deviceId } = parseParams(c, deviceParamsSchema);

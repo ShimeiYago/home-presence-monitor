@@ -413,6 +413,9 @@ export class CdkStack extends Stack {
     });
 
     const heartbeatsResource = deviceIdResource.addResource("heartbeats");
+    heartbeatsResource.addMethod("GET", apiIntegration, {
+      apiKeyRequired: true,
+    });
     heartbeatsResource.addMethod("POST", apiIntegration, {
       apiKeyRequired: true,
     });

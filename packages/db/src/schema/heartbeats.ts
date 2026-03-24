@@ -122,3 +122,36 @@ export const queryLatestHeartbeatByDevice = async (params: {
   const item = result.Items?.[0];
   return item ? parseHeartbeatRecord(item) : undefined;
 };
+
+export const queryHeartbeatsByDeviceAndRange = async (params: {
+  deviceId: string;
+  from: string;
+  to: string;
+}): Promise<HeartbeatRecord[]> => {
+  const result = await getDdbDocClient().send(
+    new QueryCommand({
+      TableName: getTableName("HEARTBEATS"),
+      KeyConditionExpression: "#pk = :pk AND #sk BETWEEN :fromSk AND :toSk",
+      ExpressionAttributeNames: {
+        "#pk": "PK",
+        "#sk": "SK",
+      },
+      ExpressionAttributeValues: {
+        ":pk": buildHeartbeatPk(params.deviceId),
+        ":fromSk": buildHeartbeatSk(params.from),
+        ":toSk": buildHeartbeatSk(params.to),
+      },
+      ScanIndexForward: false,
+    }),
+  );
+
+  const records: HeartbeatRecord[] = [];
+  for (const item of result.Items ?? []) {
+    const parsed = parseHeartbeatRecord(item);
+    if (parsed) {
+      records.push(parsed);
+    }
+  }
+
+  return records;
+};
