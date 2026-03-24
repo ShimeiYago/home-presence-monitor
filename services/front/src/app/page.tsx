@@ -185,19 +185,13 @@ export default function Home() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [apiConfig, setApiConfig] = useState<ApiConfig>(() =>
-    resolveApiConfig(),
-  );
+  const apiConfig = useMemo<ApiConfig>(() => resolveApiConfig(), []);
 
   const totalMotionCount = useMemo(
     () => activities.reduce((sum, row) => sum + row.motionCount, 0),
     [activities],
   );
   const isApiConfigured = Boolean(apiConfig.apiBaseUrl && apiConfig.apiKey);
-
-  useEffect(() => {
-    setApiConfig(resolveApiConfig());
-  }, []);
 
   const refresh = useCallback(async () => {
     if (!apiConfig.apiBaseUrl) {
@@ -262,7 +256,13 @@ export default function Home() {
   }, [apiConfig.apiBaseUrl, apiConfig.apiKey, selectedDevice, selectedPreset]);
 
   useEffect(() => {
-    void refresh();
+    const timerId = window.setTimeout(() => {
+      void refresh();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timerId);
+    };
   }, [refresh]);
 
   return (
