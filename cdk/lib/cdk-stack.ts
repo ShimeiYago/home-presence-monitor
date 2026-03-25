@@ -461,6 +461,7 @@ export class CdkStack extends Stack {
         environment: {
           NODE_ENV: DDB_TABLE_ENV,
           ALERT_TOPIC_ARN: monitorAlertTopic.topicArn,
+          FRONTEND_URL: `https://${distribution.distributionDomainName}`,
         },
       },
     );

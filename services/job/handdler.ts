@@ -12,6 +12,7 @@ import {
 
 const envSchema = z.object({
   ALERT_TOPIC_ARN: z.string().min(1),
+  FRONTEND_URL: z.string().url(),
 });
 
 type Env = z.infer<typeof envSchema>;
@@ -79,14 +80,15 @@ const evaluateDevice = async (
 
   const reasons: string[] = [];
   let heartbeatAgeMinutes: number | undefined;
+  const heartbeatRuleText = `${MONITOR_THRESHOLDS.heartbeatStaleMinutes}分以上未受信で異常`;
 
   if (!latestHeartbeat) {
-    reasons.push("heartbeat未記録");
+    reasons.push(`ラズパイ状態は未記録です（${heartbeatRuleText}）`);
   } else {
     heartbeatAgeMinutes = minutesSince(latestHeartbeat.timestamp, nowMs);
     if (heartbeatAgeMinutes > MONITOR_THRESHOLDS.heartbeatStaleMinutes) {
       reasons.push(
-        `heartbeat最終受信から${heartbeatAgeMinutes}分経過（閾値${MONITOR_THRESHOLDS.heartbeatStaleMinutes}分）`,
+        `ラズパイ状態: 最終受信から${heartbeatAgeMinutes}分（${heartbeatRuleText}）`,
       );
     }
   }
@@ -97,7 +99,7 @@ const evaluateDevice = async (
   );
   if (activityTotal <= MONITOR_THRESHOLDS.sensorMotionCountAlertThreshold) {
     reasons.push(
-      `直近1時間のactivity合計${activityTotal}回（閾値${MONITOR_THRESHOLDS.sensorMotionCountAlertThreshold}回超過）`,
+      `センサー記録: 直近1時間のセンサー検知回数 ${activityTotal}回（閾値${MONITOR_THRESHOLDS.sensorMotionCountAlertThreshold}回超過で正常）`,
     );
   }
 
@@ -127,26 +129,36 @@ const transitionFromPrevious = (
 
 const buildNotificationMessage = (
   notifications: TransitionNotification[],
-  nowIso: string,
+  frontendUrl: string,
 ): string => {
   const lines: string[] = [];
-  lines.push(`監視状態の遷移を検知しました (${nowIso})`);
+  lines.push(`<${frontendUrl}|ダッシュボード>`);
   lines.push("");
 
   for (const item of notifications) {
     lines.push(`- ${item.deviceId}: ${item.transition}`);
-    lines.push(
-      `  判定: ${item.current.isHealthy ? "正常" : "異常"} / ${item.current.reason}`,
-    );
-    if (item.current.heartbeatAgeMinutes !== undefined) {
-      lines.push(`  heartbeat経過: ${item.current.heartbeatAgeMinutes}分`);
+    if (item.current.isHealthy) {
+      lines.push("  判定: 正常");
     } else {
-      lines.push("  heartbeat経過: 未記録");
+      lines.push(`  判定: 異常あり / ${item.current.reason}`);
     }
-    lines.push(`  activity合計(直近1時間): ${item.current.activityTotal}回`);
   }
 
   return lines.join("\n");
+};
+
+const buildNotificationHeadline = (
+  notifications: TransitionNotification[],
+): string => {
+  if (notifications.every((item) => item.current.isHealthy)) {
+    return "状態が正常になりました";
+  }
+
+  if (notifications.every((item) => !item.current.isHealthy)) {
+    return "状態が異常になりました";
+  }
+
+  return "状態が正常/異常に変化しました";
 };
 
 const toCustomNotificationPayload = (
@@ -222,9 +234,9 @@ export const handler: ScheduledHandler = async () => {
   }
 
   const transitionPayload = toCustomNotificationPayload(
-    `:rotating_light: HomePresenceMonitor 遷移通知 (${notifications.length}件)`,
-    buildNotificationMessage(notifications, nowIso),
-    ["HomePresenceMonitor", "Transition", "Monitor"],
+    `:rotating_light: 活動検知モニター ${buildNotificationHeadline(notifications)} (${notifications.length}件)`,
+    buildNotificationMessage(notifications, env.FRONTEND_URL),
+    ["活動検知モニター", "Transition", "Monitor"],
   );
   await publishNotification(env.ALERT_TOPIC_ARN, transitionPayload);
 
