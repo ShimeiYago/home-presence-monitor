@@ -3,10 +3,13 @@ import { resolve } from "node:path";
 
 import {
   aws_apigateway as apigateway,
+  aws_chatbot as chatbot,
   aws_certificatemanager as acm,
   aws_cloudfront as cloudfront,
   aws_cloudfront_origins as origins,
   aws_dynamodb as dynamodb,
+  aws_events as events,
+  aws_events_targets as eventsTargets,
   aws_iam as iam,
   aws_lambda as lambda,
   aws_lambda_nodejs as lambdaNodejs,
@@ -14,6 +17,7 @@ import {
   aws_route53_targets as route53Targets,
   aws_s3 as s3,
   aws_s3_deployment as s3deploy,
+  aws_sns as sns,
   CfnOutput,
   Duration,
   Fn,
@@ -50,6 +54,22 @@ const API_TSCONFIG_PATH = resolve(
   "..",
   "services",
   "api",
+  "tsconfig.json",
+);
+const JOB_ENTRY_PATH = resolve(
+  __dirname,
+  "..",
+  "..",
+  "services",
+  "job",
+  "handdler.ts",
+);
+const JOB_TSCONFIG_PATH = resolve(
+  __dirname,
+  "..",
+  "..",
+  "services",
+  "job",
   "tsconfig.json",
 );
 const DB_SCHEMA_MODULE_PATH = resolve(
@@ -138,8 +158,22 @@ export class CdkStack extends Stack {
       );
     }
 
+    if (!existsSync(JOB_ENTRY_PATH)) {
+      throw new Error(
+        `Job Lambda entrypoint not found at ${JOB_ENTRY_PATH}. Confirm services/job/handdler.ts exists.`,
+      );
+    }
+
+    if (!existsSync(JOB_TSCONFIG_PATH)) {
+      throw new Error(
+        `Job Lambda tsconfig not found at ${JOB_TSCONFIG_PATH}. Confirm services/job/tsconfig.json exists.`,
+      );
+    }
+
     const basicAuthUsername = process.env.CLOUDFRONT_BASIC_AUTH_USERNAME;
     const basicAuthPassword = process.env.CLOUDFRONT_BASIC_AUTH_PASSWORD;
+    const slackChannelId = "C0AN31Z2ML7";
+    const slackWorkspaceId = "T0ANXC5475F";
 
     if (!basicAuthUsername || !basicAuthPassword) {
       throw new Error(
@@ -315,6 +349,7 @@ export class CdkStack extends Stack {
 
     const tableEntries = Object.entries(ddbTableSchemas);
     const tables: dynamodb.Table[] = [];
+    const tablesBySchemaKey: Record<string, dynamodb.Table> = {};
 
     for (const [schemaKey, schema] of tableEntries) {
       const table = new dynamodb.Table(this, `${schemaKey}Table`, {
@@ -357,6 +392,7 @@ export class CdkStack extends Stack {
       }
 
       tables.push(table);
+      tablesBySchemaKey[schemaKey] = table;
     }
 
     const apiFunction = new lambdaNodejs.NodejsFunction(this, "ApiFunction", {
@@ -378,9 +414,68 @@ export class CdkStack extends Stack {
       },
     });
 
-    for (const table of tables) {
-      table.grantReadWriteData(apiFunction);
+    const heartbeatsTable = tablesBySchemaKey.HEARTBEATS;
+    const activitiesTable = tablesBySchemaKey.ACTIVITIES;
+    const monitorStatesTable = tablesBySchemaKey.MONITOR_STATES;
+
+    if (!heartbeatsTable || !activitiesTable || !monitorStatesTable) {
+      throw new Error(
+        "Required tables (HEARTBEATS, ACTIVITIES, MONITOR_STATES) were not initialized.",
+      );
     }
+
+    heartbeatsTable.grantReadWriteData(apiFunction);
+    activitiesTable.grantReadWriteData(apiFunction);
+
+    const monitorAlertTopic = new sns.Topic(this, "MonitorAlertTopic", {
+      topicName: `${siteNameKey}-monitor-alerts`,
+    });
+
+    new chatbot.SlackChannelConfiguration(this, "MonitorSlackChannel", {
+      slackChannelConfigurationName: `${siteNameKey}-monitor-alerts`,
+      slackWorkspaceId,
+      slackChannelId,
+      notificationTopics: [monitorAlertTopic],
+      loggingLevel: chatbot.LoggingLevel.ERROR,
+      guardrailPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName("ReadOnlyAccess"),
+      ],
+    });
+
+    const monitorJobFunction = new lambdaNodejs.NodejsFunction(
+      this,
+      "MonitorJobFunction",
+      {
+        entry: JOB_ENTRY_PATH,
+        handler: "handler",
+        runtime: lambda.Runtime.NODEJS_20_X,
+        architecture: lambda.Architecture.ARM_64,
+        memorySize: 256,
+        timeout: Duration.seconds(15),
+        bundling: {
+          format: lambdaNodejs.OutputFormat.CJS,
+          target: "node20",
+          sourceMap: true,
+          tsconfig: JOB_TSCONFIG_PATH,
+        },
+        environment: {
+          NODE_ENV: DDB_TABLE_ENV,
+          ALERT_TOPIC_ARN: monitorAlertTopic.topicArn,
+        },
+      },
+    );
+
+    heartbeatsTable.grantReadData(monitorJobFunction);
+    activitiesTable.grantReadData(monitorJobFunction);
+    monitorStatesTable.grantReadWriteData(monitorJobFunction);
+    monitorAlertTopic.grantPublish(monitorJobFunction);
+
+    const monitorJobRule = new events.Rule(this, "MonitorJobRule", {
+      schedule: events.Schedule.rate(Duration.minutes(5)),
+    });
+    monitorJobRule.addTarget(
+      new eventsTargets.LambdaFunction(monitorJobFunction),
+    );
 
     const apiGateway = new apigateway.RestApi(this, "ApiGateway", {
       restApiName: `${siteNameKey}-Api`,

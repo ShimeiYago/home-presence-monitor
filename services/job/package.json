@@ -1,0 +1,19 @@
+{
+  "name": "job",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sns": "^3.952.0",
+    "@home-presence-monitor/db": "file:../../packages/db",
+    "zod": "^4.3.5"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.159",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.9.3"
+  }
+}

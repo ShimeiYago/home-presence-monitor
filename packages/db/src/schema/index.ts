@@ -53,6 +53,12 @@ export const ddbTableSchemas = {
     ttlEnabled: true,
     billingMode: "PAY_PER_REQUEST",
   },
+
+  MONITOR_STATES: {
+    nameSuffix: "MonitorStates",
+    keySchema: { partitionKey: "PK", sortKey: "SK" },
+    billingMode: "PAY_PER_REQUEST",
+  },
 } as const satisfies Record<string, DdbTableSchema>;
 
 export const resolveDdbAttributeType = (
