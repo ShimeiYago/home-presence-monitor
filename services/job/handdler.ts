@@ -30,6 +30,17 @@ type TransitionNotification = {
   current: DeviceHealth;
 };
 
+type CustomNotificationPayload = {
+  version: "1.0";
+  source: "custom";
+  content: {
+    textType: "client-markdown";
+    title: string;
+    description: string;
+    keywords?: string[];
+  };
+};
+
 let cachedEnv: Env | undefined;
 
 const getEnv = (): Env => {
@@ -138,18 +149,31 @@ const buildNotificationMessage = (
   return lines.join("\n");
 };
 
+const toCustomNotificationPayload = (
+  title: string,
+  description: string,
+  keywords?: string[],
+): CustomNotificationPayload => ({
+  version: "1.0",
+  source: "custom",
+  content: {
+    textType: "client-markdown",
+    title,
+    description,
+    ...(keywords && keywords.length > 0 ? { keywords } : {}),
+  },
+});
+
 const snsClient = new SNSClient({});
 
 const publishNotification = async (
   topicArn: string,
-  subject: string,
-  message: string,
+  payload: CustomNotificationPayload,
 ): Promise<void> => {
   await snsClient.send(
     new PublishCommand({
       TopicArn: topicArn,
-      Subject: subject,
-      Message: message,
+      Message: JSON.stringify(payload),
     }),
   );
 };
@@ -197,9 +221,12 @@ export const handler: ScheduledHandler = async () => {
     return;
   }
 
-  const subject = `HomePresenceMonitor 遷移通知 (${notifications.length}件)`;
-  const message = buildNotificationMessage(notifications, nowIso);
-  await publishNotification(env.ALERT_TOPIC_ARN, subject, message);
+  const transitionPayload = toCustomNotificationPayload(
+    `:rotating_light: HomePresenceMonitor 遷移通知 (${notifications.length}件)`,
+    buildNotificationMessage(notifications, nowIso),
+    ["HomePresenceMonitor", "Transition", "Monitor"],
+  );
+  await publishNotification(env.ALERT_TOPIC_ARN, transitionPayload);
 
   console.log(
     JSON.stringify({
