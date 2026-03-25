@@ -472,7 +472,7 @@ export class CdkStack extends Stack {
     monitorAlertTopic.grantPublish(monitorJobFunction);
 
     const monitorJobRule = new events.Rule(this, "MonitorJobRule", {
-      schedule: events.Schedule.rate(Duration.minutes(5)),
+      schedule: events.Schedule.rate(Duration.minutes(10)),
     });
     monitorJobRule.addTarget(
       new eventsTargets.LambdaFunction(monitorJobFunction),
