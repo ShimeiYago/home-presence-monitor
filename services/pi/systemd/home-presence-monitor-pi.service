@@ -7,9 +7,9 @@ Wants=network-online.target
 Type=simple
 User=admin
 Group=admin
-WorkingDirectory=/home/admin/home-presence-monitor
-EnvironmentFile=/home/admin/home-presence-monitor/.env
-ExecStart=/home/admin/home-presence-monitor/.venv/bin/python /home/admin/home-presence-monitor/monitor.py
+WorkingDirectory=/home/admin/home-presence-monitor/services/pi
+EnvironmentFile=/home/admin/home-presence-monitor/services/pi/.env
+ExecStart=/home/admin/home-presence-monitor/services/pi/.venv/bin/python /home/admin/home-presence-monitor/services/pi/monitor.py
 Restart=always
 RestartSec=5
 

@@ -1,0 +1,14 @@
+[Unit]
+Description=Update Home Presence Monitor Raspberry Pi agent from git
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=REPO_DIR=/home/admin/home-presence-monitor
+Environment=PI_DIR=/home/admin/home-presence-monitor/services/pi
+Environment=VENV_DIR=/home/admin/home-presence-monitor/services/pi/.venv
+Environment=PI_USER=admin
+Environment=GIT_BRANCH=main
+Environment=PI_SERVICE_NAME=home-presence-monitor-pi.service
+ExecStart=/home/admin/home-presence-monitor/services/pi/scripts/self-update.sh

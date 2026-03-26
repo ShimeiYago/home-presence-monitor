@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically update Home Presence Monitor Raspberry Pi agent
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+RandomizedDelaySec=2min
+Unit=home-presence-monitor-pi-update.service
+
+[Install]
+WantedBy=timers.target
