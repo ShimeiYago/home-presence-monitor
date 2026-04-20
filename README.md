@@ -106,21 +106,21 @@ sudo apt install -y git
 2. git でプライベートリポジトリを参照するために、Pi 側の `admin` ユーザーに deploy key を作る
 
 ```sh
-sudo -u admin mkdir -p $HOME/.ssh
-sudo -u admin chmod 700 $HOME/.ssh
-sudo -u admin ssh-keygen -t ed25519 -f $HOME/.ssh/home-presence-monitor-deploy -N ""
-sudo -u admin ssh-keyscan -H github.com >> $HOME/.ssh/known_hosts
-sudo -u admin chmod 600 $HOME/.ssh/known_hosts
-cat <<'EOF' | sudo tee $HOME/.ssh/config >/dev/null
+sudo install -d -m 700 -o admin -g admin /home/admin/.ssh
+sudo -u admin ssh-keygen -t ed25519 -f /home/admin/.ssh/home-presence-monitor-deploy -N ""
+sudo -u admin ssh-keyscan -H github.com | sudo tee -a /home/admin/.ssh/known_hosts >/dev/null
+sudo chown admin:admin /home/admin/.ssh/known_hosts
+sudo chmod 600 /home/admin/.ssh/known_hosts
+cat <<'EOF' | sudo tee /home/admin/.ssh/config >/dev/null
 Host github-hpm
   HostName github.com
   User git
-  IdentityFile $HOME/.ssh/home-presence-monitor-deploy
+  IdentityFile /home/admin/.ssh/home-presence-monitor-deploy
   IdentitiesOnly yes
 EOF
-sudo chown admin:admin $HOME/.ssh/config
-sudo chmod 600 $HOME/.ssh/config
-sudo -u admin cat $HOME/.ssh/home-presence-monitor-deploy.pub
+sudo chown admin:admin /home/admin/.ssh/config
+sudo chmod 600 /home/admin/.ssh/config
+sudo -u admin cat /home/admin/.ssh/home-presence-monitor-deploy.pub
 ```
 
 表示された公開鍵を GitHub の対象 repository (home-presence-monitor) の `Settings > Deploy keys` に read-only で登録します。
@@ -153,6 +153,7 @@ cp .env.example .env
 
 6. `services/pi/.env` を環境に合わせて編集する
 
+- `API_URL`
 - `API_KEY`
 
 7. systemd unit を配置する
