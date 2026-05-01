@@ -11,6 +11,21 @@ type AppContext = {
   };
 };
 
+const getSourceIp = (
+  forwardedForHeader: string | undefined,
+): string | undefined => {
+  if (!forwardedForHeader) {
+    return undefined;
+  }
+
+  const [firstIp] = forwardedForHeader
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  return firstIp;
+};
+
 export const createApp = () => {
   const app = new Hono<AppContext>();
   const isTest = process.env.NODE_ENV === "test";
@@ -39,6 +54,7 @@ export const createApp = () => {
       const url = c.req.url;
       const method = c.req.method;
       const status = c.res?.status ?? (error ? 500 : 0);
+      const sourceIp = getSourceIp(c.req.header("x-forwarded-for"));
 
       const logPayload: Record<string, unknown> = {
         timestamp: new Date().toISOString(),
@@ -50,6 +66,7 @@ export const createApp = () => {
         path: new URL(url).pathname,
         status,
         durationMs,
+        sourceIp,
       };
 
       console.log(JSON.stringify(logPayload));

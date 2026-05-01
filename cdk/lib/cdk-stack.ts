@@ -13,6 +13,7 @@ import {
   aws_iam as iam,
   aws_lambda as lambda,
   aws_lambda_nodejs as lambdaNodejs,
+  aws_logs as logs,
   aws_route53 as route53,
   aws_route53_targets as route53Targets,
   aws_s3 as s3,
@@ -478,10 +479,35 @@ export class CdkStack extends Stack {
       new eventsTargets.LambdaFunction(monitorJobFunction),
     );
 
+    const apiAccessLogGroup = new logs.LogGroup(this, "ApiAccessLogGroup", {
+      logGroupName: `/aws/apigateway/${siteNameKey}-api-access`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+
     const apiGateway = new apigateway.RestApi(this, "ApiGateway", {
       restApiName: `${siteNameKey}-Api`,
       deployOptions: {
         stageName: "prod",
+        accessLogDestination: new apigateway.LogGroupLogDestination(
+          apiAccessLogGroup,
+        ),
+        accessLogFormat: apigateway.AccessLogFormat.custom(
+          JSON.stringify({
+            requestId: apigateway.AccessLogField.contextRequestId(),
+            extendedRequestId:
+              apigateway.AccessLogField.contextExtendedRequestId(),
+            sourceIp: apigateway.AccessLogField.contextIdentitySourceIp(),
+            caller: apigateway.AccessLogField.contextIdentityCaller(),
+            user: apigateway.AccessLogField.contextIdentityUser(),
+            requestTime: apigateway.AccessLogField.contextRequestTime(),
+            httpMethod: apigateway.AccessLogField.contextHttpMethod(),
+            resourcePath: apigateway.AccessLogField.contextResourcePath(),
+            status: apigateway.AccessLogField.contextStatus(),
+            protocol: apigateway.AccessLogField.contextProtocol(),
+            responseLength: apigateway.AccessLogField.contextResponseLength(),
+          }),
+        ),
       },
       defaultCorsPreflightOptions: {
         allowOrigins: frontOrigins,
