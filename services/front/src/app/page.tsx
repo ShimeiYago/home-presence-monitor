@@ -1,22 +1,29 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, Cpu, House } from "lucide-react";
+import { Activity, Cpu, House, Router } from "lucide-react";
 import { DEVICE_IDS } from "@home-presence-monitor/config/device";
+import type { GetDeviceSourceIpResponse } from "@home-presence-monitor/contracts/api";
 import { MONITOR_THRESHOLDS } from "@home-presence-monitor/config/monitor";
 import { OverviewCard } from "@/components/dashboard/overview-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { fetchActivities, fetchLatestHeartbeat } from "@/lib/device-api";
+import {
+  fetchActivities,
+  fetchDeviceSourceIp,
+  fetchLatestHeartbeat,
+} from "@/lib/device-api";
 import { resolveApiConfig, type ApiConfig } from "@/lib/runtime-config";
 import { buildRange } from "@/lib/time-range";
-import { minutesSince } from "@/lib/time";
+import { formatJstDateTimeMinute, minutesSince } from "@/lib/time";
 
 type SensorSummary = {
   recordCount: number;
   motionTotal: number;
 };
+
+type SourceIpSummary = GetDeviceSourceIpResponse | null;
 
 type CardStatus = {
   label: string;
@@ -32,6 +39,7 @@ export default function Home() {
   const [sensorSummary, setSensorSummary] = useState<SensorSummary | null>(
     null,
   );
+  const [sourceIpSummary, setSourceIpSummary] = useState<SourceIpSummary>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const apiConfig = useMemo<ApiConfig>(() => resolveApiConfig(), []);
@@ -60,19 +68,25 @@ export default function Home() {
     setIsLoading(true);
     setErrorMessage(null);
 
-    const [activitiesResult, heartbeatResult] = await Promise.allSettled([
-      fetchActivities(
-        apiConfig.apiBaseUrl,
-        apiConfig.apiKey,
-        selectedDevice,
-        buildRange("1h"),
-      ),
-      fetchLatestHeartbeat(
-        apiConfig.apiBaseUrl,
-        apiConfig.apiKey,
-        selectedDevice,
-      ),
-    ]);
+    const [activitiesResult, heartbeatResult, sourceIpResult] =
+      await Promise.allSettled([
+        fetchActivities(
+          apiConfig.apiBaseUrl,
+          apiConfig.apiKey,
+          selectedDevice,
+          buildRange("1h"),
+        ),
+        fetchLatestHeartbeat(
+          apiConfig.apiBaseUrl,
+          apiConfig.apiKey,
+          selectedDevice,
+        ),
+        fetchDeviceSourceIp(
+          apiConfig.apiBaseUrl,
+          apiConfig.apiKey,
+          selectedDevice,
+        ),
+      ]);
 
     const errors: string[] = [];
 
@@ -99,6 +113,15 @@ export default function Home() {
       setLatestHeartbeatAt(null);
       errors.push(
         `Heartbeat取得失敗: ${heartbeatResult.reason instanceof Error ? heartbeatResult.reason.message : String(heartbeatResult.reason)}`,
+      );
+    }
+
+    if (sourceIpResult.status === "fulfilled") {
+      setSourceIpSummary(sourceIpResult.value);
+    } else {
+      setSourceIpSummary(null);
+      errors.push(
+        `送信元IP取得失敗: ${sourceIpResult.reason instanceof Error ? sourceIpResult.reason.message : String(sourceIpResult.reason)}`,
       );
     }
 
@@ -197,6 +220,30 @@ export default function Home() {
     };
   }, [isLoading, sensorSummary]);
 
+  const sourceIpStatus = useMemo<CardStatus>(() => {
+    if (isLoading && sourceIpSummary === null) {
+      return {
+        label: "確認中",
+        isAlert: false,
+        detail: "最新の送信元IPを取得中です",
+      };
+    }
+
+    if (!sourceIpSummary) {
+      return {
+        label: "未記録",
+        isAlert: true,
+        detail: "heartbeat 受信時の送信元IPはまだ記録されていません",
+      };
+    }
+
+    return {
+      label: "記録あり",
+      isAlert: false,
+      detail: `最終観測: ${formatJstDateTimeMinute(sourceIpSummary.observedAt)} JST`,
+    };
+  }, [isLoading, sourceIpSummary]);
+
   const heartbeatPrimary =
     isLoading && !latestHeartbeatAt ? (
       <Skeleton className="h-8 w-48" />
@@ -218,6 +265,17 @@ export default function Home() {
         className={sensorStatus.isAlert ? "text-red-600" : "text-emerald-600"}
       >
         {sensorSummary?.motionTotal ?? 0} 回
+      </span>
+    );
+
+  const sourceIpPrimary =
+    isLoading && sourceIpSummary === null ? (
+      <Skeleton className="h-8 w-40" />
+    ) : (
+      <span
+        className={sourceIpStatus.isAlert ? "text-slate-500" : "text-slate-900"}
+      >
+        {sourceIpSummary?.sourceIp ?? "未記録"}
       </span>
     );
 
@@ -284,6 +342,22 @@ export default function Home() {
             primary={sensorPrimary}
             secondary={sensorStatus.detail}
             href="/activities"
+          />
+
+          <OverviewCard
+            title="送信元ルーターIP"
+            titleIcon={<Router className="h-5 w-5 text-slate-600" />}
+            status={
+              sourceIpStatus.isAlert ? (
+                <Badge variant="destructive">{sourceIpStatus.label}</Badge>
+              ) : (
+                <Badge className="border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-600">
+                  {sourceIpStatus.label}
+                </Badge>
+              )
+            }
+            primary={sourceIpPrimary}
+            secondary={sourceIpStatus.detail}
           />
         </section>
       </main>

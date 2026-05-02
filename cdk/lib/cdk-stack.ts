@@ -427,6 +427,7 @@ export class CdkStack extends Stack {
 
     heartbeatsTable.grantReadWriteData(apiFunction);
     activitiesTable.grantReadWriteData(apiFunction);
+    monitorStatesTable.grantReadWriteData(apiFunction);
 
     const monitorAlertTopic = new sns.Topic(this, "MonitorAlertTopic", {
       topicName: `${siteNameKey}-monitor-alerts`,
@@ -544,6 +545,11 @@ export class CdkStack extends Stack {
 
     const latestHeartbeatResource = heartbeatsResource.addResource("latest");
     latestHeartbeatResource.addMethod("GET", apiIntegration, {
+      apiKeyRequired: true,
+    });
+
+    const sourceIpResource = deviceIdResource.addResource("source-ip");
+    sourceIpResource.addMethod("GET", apiIntegration, {
       apiKeyRequired: true,
     });
 

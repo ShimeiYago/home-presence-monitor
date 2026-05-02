@@ -1,6 +1,7 @@
 import type {
   GetActivitiesResponse,
   GetHeartbeatsResponse,
+  GetDeviceSourceIpResponse,
   GetLatestHeartbeatResponse,
 } from "@home-presence-monitor/contracts/api";
 import type { TimeRange } from "@/lib/time-range";
@@ -89,4 +90,31 @@ export const fetchHeartbeats = async (
   }
 
   return (await response.json()) as GetHeartbeatsResponse;
+};
+
+export const fetchDeviceSourceIp = async (
+  baseUrl: string,
+  apiKey: string,
+  deviceId: string,
+): Promise<GetDeviceSourceIpResponse | null> => {
+  const response = await fetch(
+    `${baseUrl}/v1/devices/${encodeURIComponent(deviceId)}/source-ip`,
+    {
+      method: "GET",
+      cache: "no-store",
+      headers: {
+        "x-api-key": apiKey,
+      },
+    },
+  );
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error(await parseApiErrorMessage(response));
+  }
+
+  return (await response.json()) as GetDeviceSourceIpResponse;
 };

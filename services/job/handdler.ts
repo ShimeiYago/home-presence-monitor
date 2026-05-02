@@ -7,7 +7,7 @@ import { queryActivitiesByDeviceAndRange } from "@home-presence-monitor/db/schem
 import { queryLatestHeartbeatByDevice } from "@home-presence-monitor/db/schema/heartbeats";
 import {
   getMonitorStateByDevice,
-  putMonitorState,
+  updateMonitorEvaluation,
 } from "@home-presence-monitor/db/schema/monitor-states";
 
 const envSchema = z.object({
@@ -212,7 +212,7 @@ export const handler: ScheduledHandler = async () => {
       });
     }
 
-    await putMonitorState({
+    await updateMonitorEvaluation({
       deviceId,
       isHealthy: current.isHealthy,
       updatedAt: nowIso,

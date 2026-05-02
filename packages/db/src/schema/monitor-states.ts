@@ -1,8 +1,32 @@
-import { GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { getDdbDocClient, getTableName } from "../ddb";
 import { isRecord, readBoolean, readNumber, readString } from "../guards";
 
 export type MonitorStateRecord = {
+  deviceId: string;
+  isHealthy?: boolean;
+  updatedAt?: string;
+  reason?: string;
+  heartbeatAgeMinutes?: number;
+  activityTotal?: number;
+  lastObservedSourceIp?: string;
+  lastObservedSourceIpAt?: string;
+};
+
+export type MonitorStateItem = {
+  PK: string;
+  SK: string;
+  deviceId: string;
+  isHealthy?: boolean;
+  updatedAt?: string;
+  reason?: string;
+  heartbeatAgeMinutes?: number;
+  activityTotal?: number;
+  lastObservedSourceIp?: string;
+  lastObservedSourceIpAt?: string;
+};
+
+export type MonitorEvaluationUpdate = {
   deviceId: string;
   isHealthy: boolean;
   updatedAt: string;
@@ -11,15 +35,10 @@ export type MonitorStateRecord = {
   activityTotal: number;
 };
 
-export type MonitorStateItem = {
-  PK: string;
-  SK: string;
+export type LatestObservedSourceIpUpdate = {
   deviceId: string;
-  isHealthy: boolean;
-  updatedAt: string;
-  reason: string;
-  heartbeatAgeMinutes?: number;
-  activityTotal: number;
+  sourceIp: string;
+  observedAt: string;
 };
 
 const DEVICE_PK_PREFIX = "DEVICE#";
@@ -50,35 +69,31 @@ export const parseMonitorStateRecord = (
   const reason = readString(item, "reason");
   const heartbeatAgeMinutes = readNumber(item, "heartbeatAgeMinutes");
   const activityTotal = readNumber(item, "activityTotal");
+  const lastObservedSourceIp = readString(item, "lastObservedSourceIp");
+  const lastObservedSourceIpAt = readString(item, "lastObservedSourceIpAt");
 
-  if (
-    !pk ||
-    !sk ||
-    !deviceId ||
-    isHealthy === undefined ||
-    !updatedAt ||
-    !reason ||
-    activityTotal === undefined
-  ) {
+  if (!pk || !sk) {
     return undefined;
   }
 
   const parsedDeviceId = parseDeviceIdFromPk(pk);
   if (
     !parsedDeviceId ||
-    parsedDeviceId !== deviceId ||
-    sk !== MONITOR_STATE_SK
+    sk !== MONITOR_STATE_SK ||
+    (deviceId !== undefined && parsedDeviceId !== deviceId)
   ) {
     return undefined;
   }
 
   return {
-    deviceId,
-    isHealthy,
-    updatedAt,
-    reason,
-    heartbeatAgeMinutes,
-    activityTotal,
+    deviceId: deviceId ?? parsedDeviceId,
+    ...(isHealthy === undefined ? {} : { isHealthy }),
+    ...(updatedAt === undefined ? {} : { updatedAt }),
+    ...(reason === undefined ? {} : { reason }),
+    ...(heartbeatAgeMinutes === undefined ? {} : { heartbeatAgeMinutes }),
+    ...(activityTotal === undefined ? {} : { activityTotal }),
+    ...(lastObservedSourceIp === undefined ? {} : { lastObservedSourceIp }),
+    ...(lastObservedSourceIpAt === undefined ? {} : { lastObservedSourceIpAt }),
   };
 };
 
@@ -88,22 +103,95 @@ export const buildMonitorStateItem = (
   PK: buildMonitorStatePk(record.deviceId),
   SK: buildMonitorStateSk(),
   deviceId: record.deviceId,
-  isHealthy: record.isHealthy,
-  updatedAt: record.updatedAt,
-  reason: record.reason,
-  heartbeatAgeMinutes: record.heartbeatAgeMinutes,
-  activityTotal: record.activityTotal,
+  ...(record.isHealthy === undefined ? {} : { isHealthy: record.isHealthy }),
+  ...(record.updatedAt === undefined ? {} : { updatedAt: record.updatedAt }),
+  ...(record.reason === undefined ? {} : { reason: record.reason }),
+  ...(record.heartbeatAgeMinutes === undefined
+    ? {}
+    : { heartbeatAgeMinutes: record.heartbeatAgeMinutes }),
+  ...(record.activityTotal === undefined
+    ? {}
+    : { activityTotal: record.activityTotal }),
+  ...(record.lastObservedSourceIp === undefined
+    ? {}
+    : { lastObservedSourceIp: record.lastObservedSourceIp }),
+  ...(record.lastObservedSourceIpAt === undefined
+    ? {}
+    : { lastObservedSourceIpAt: record.lastObservedSourceIpAt }),
 });
 
-export const putMonitorState = async (
-  record: MonitorStateRecord,
+const updateMonitorState = async (
+  deviceId: string,
+  fieldsToSet: Record<string, string | number | boolean>,
+  fieldsToRemove: string[] = [],
 ): Promise<void> => {
+  const expressionAttributeNames: Record<string, string> = {
+    "#deviceId": "deviceId",
+  };
+  const expressionAttributeValues: Record<string, string | number | boolean> = {
+    ":deviceId": deviceId,
+  };
+  const setClauses = ["#deviceId = :deviceId"];
+  const removeClauses: string[] = [];
+
+  for (const [fieldName, fieldValue] of Object.entries(fieldsToSet)) {
+    const fieldAlias = `#${fieldName}`;
+    const valueAlias = `:${fieldName}`;
+    expressionAttributeNames[fieldAlias] = fieldName;
+    expressionAttributeValues[valueAlias] = fieldValue;
+    setClauses.push(`${fieldAlias} = ${valueAlias}`);
+  }
+
+  for (const fieldName of fieldsToRemove) {
+    const fieldAlias = `#${fieldName}`;
+    expressionAttributeNames[fieldAlias] = fieldName;
+    removeClauses.push(fieldAlias);
+  }
+
+  const updateExpressionParts = [`SET ${setClauses.join(", ")}`];
+  if (removeClauses.length > 0) {
+    updateExpressionParts.push(`REMOVE ${removeClauses.join(", ")}`);
+  }
+
   await getDdbDocClient().send(
-    new PutCommand({
+    new UpdateCommand({
       TableName: getTableName("MONITOR_STATES"),
-      Item: buildMonitorStateItem(record),
+      Key: {
+        PK: buildMonitorStatePk(deviceId),
+        SK: buildMonitorStateSk(),
+      },
+      UpdateExpression: updateExpressionParts.join(" "),
+      ExpressionAttributeNames: expressionAttributeNames,
+      ExpressionAttributeValues: expressionAttributeValues,
     }),
   );
+};
+
+export const updateMonitorEvaluation = async (
+  record: MonitorEvaluationUpdate,
+): Promise<void> => {
+  await updateMonitorState(
+    record.deviceId,
+    {
+      isHealthy: record.isHealthy,
+      updatedAt: record.updatedAt,
+      reason: record.reason,
+      activityTotal: record.activityTotal,
+      ...(record.heartbeatAgeMinutes === undefined
+        ? {}
+        : { heartbeatAgeMinutes: record.heartbeatAgeMinutes }),
+    },
+    record.heartbeatAgeMinutes === undefined ? ["heartbeatAgeMinutes"] : [],
+  );
+};
+
+export const updateLatestObservedSourceIp = async (
+  params: LatestObservedSourceIpUpdate,
+): Promise<void> => {
+  await updateMonitorState(params.deviceId, {
+    lastObservedSourceIp: params.sourceIp,
+    lastObservedSourceIpAt: params.observedAt,
+  });
 };
 
 export const getMonitorStateByDevice = async (params: {

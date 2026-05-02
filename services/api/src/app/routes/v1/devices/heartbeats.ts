@@ -11,7 +11,9 @@ import {
   putHeartbeat,
   queryLatestHeartbeatByDevice,
 } from "@home-presence-monitor/db/schema/heartbeats";
+import { updateLatestObservedSourceIp } from "@home-presence-monitor/db/schema/monitor-states";
 import { badRequest, notFound } from "src/app/lib/errors";
+import { getSourceIp } from "src/app/lib/source-ip";
 import { parseJsonBody, parseParams, parseQuery } from "src/app/lib/zod";
 import { deviceParamsSchema } from "./common";
 
@@ -81,6 +83,15 @@ deviceHeartbeatsRoute.post("/", async (c) => {
     createdAt,
     ttl,
   });
+  const sourceIp = getSourceIp(c.req.header("x-forwarded-for"));
+
+  if (sourceIp) {
+    await updateLatestObservedSourceIp({
+      deviceId,
+      sourceIp,
+      observedAt: createdAt,
+    });
+  }
 
   return c.json<PostHeartbeatResponse>(
     {

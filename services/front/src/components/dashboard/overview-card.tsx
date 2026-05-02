@@ -17,7 +17,7 @@ type OverviewCardProps = {
   status: ReactNode;
   primary: ReactNode;
   secondary?: ReactNode;
-  href: string;
+  href?: string;
 };
 
 export function OverviewCard({
@@ -47,15 +47,17 @@ export function OverviewCard({
         </p>
         {secondary && <p className="text-sm text-slate-600">{secondary}</p>}
       </CardContent>
-      <CardFooter className="justify-end">
-        <Link
-          href={href}
-          className="inline-flex items-center gap-1 text-sm font-medium text-slate-700 transition-colors hover:text-slate-900"
-        >
-          もっと見る
-          <ArrowRight className="h-4 w-4" />
-        </Link>
-      </CardFooter>
+      {href && (
+        <CardFooter className="justify-end">
+          <Link
+            href={href}
+            className="inline-flex items-center gap-1 text-sm font-medium text-slate-700 transition-colors hover:text-slate-900"
+          >
+            もっと見る
+            <ArrowRight className="h-4 w-4" />
+          </Link>
+        </CardFooter>
+      )}
     </Card>
   );
 }

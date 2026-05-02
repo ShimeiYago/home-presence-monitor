@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { randomUUID } from "crypto";
+import { getSourceIp } from "./lib/source-ip";
 import { errorHandler, notFoundHandler } from "./middleware/error-handler";
 import { devicesRoute } from "./routes/v1/devices";
 import { healthRoute } from "./routes/healthz";
@@ -9,21 +10,6 @@ type AppContext = {
   Variables: {
     requestId: string;
   };
-};
-
-const getSourceIp = (
-  forwardedForHeader: string | undefined,
-): string | undefined => {
-  if (!forwardedForHeader) {
-    return undefined;
-  }
-
-  const [firstIp] = forwardedForHeader
-    .split(",")
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-
-  return firstIp;
 };
 
 export const createApp = () => {
