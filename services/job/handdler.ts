@@ -1,4 +1,5 @@
 import type { ScheduledHandler } from "aws-lambda";
+import { PublishCommand, SNSClient } from "@aws-sdk/client-sns";
 import { z } from "zod";
 import { DEVICE_IDS } from "@home-presence-monitor/config/device";
 import { MONITOR_THRESHOLDS } from "@home-presence-monitor/config/monitor";
@@ -10,6 +11,7 @@ import {
 } from "@home-presence-monitor/db/schema/monitor-states";
 
 const envSchema = z.object({
+  ALERT_TOPIC_ARN: z.string().min(1),
   FRONTEND_URL: z.string().url(),
   LINE_CHANNEL_ACCESS_TOKEN: z.string().min(1),
   LINE_GROUP_ID: z.string().min(1),
@@ -29,6 +31,17 @@ type TransitionNotification = {
   deviceId: string;
   transition: "初回異常" | "正常→異常" | "異常→正常";
   current: DeviceHealth;
+};
+
+type CustomNotificationPayload = {
+  version: "1.0";
+  source: "custom";
+  content: {
+    textType: "client-markdown";
+    title: string;
+    description: string;
+    keywords?: string[];
+  };
 };
 
 let cachedEnv: Env | undefined;
@@ -116,7 +129,7 @@ const transitionFromPrevious = (
   return previousHealthy ? "正常→異常" : "異常→正常";
 };
 
-const buildNotificationMessage = (
+const buildLineNotificationMessage = (
   notifications: TransitionNotification[],
   frontendUrl: string,
 ): string => {
@@ -124,6 +137,26 @@ const buildNotificationMessage = (
   const lines: string[] = [];
   lines.push(headline);
   lines.push(`ダッシュボード: ${frontendUrl}`);
+  lines.push("");
+
+  for (const item of notifications) {
+    lines.push(`- ${item.deviceId}: ${item.transition}`);
+    if (item.current.isHealthy) {
+      lines.push("  判定: 正常");
+    } else {
+      lines.push(`  判定: 異常あり / ${item.current.reason}`);
+    }
+  }
+
+  return lines.join("\n");
+};
+
+const buildSlackNotificationMessage = (
+  notifications: TransitionNotification[],
+  frontendUrl: string,
+): string => {
+  const lines: string[] = [];
+  lines.push(`<${frontendUrl}|ダッシュボード>`);
   lines.push("");
 
   for (const item of notifications) {
@@ -150,6 +183,35 @@ const buildNotificationHeadline = (
   }
 
   return "状態が正常/異常に変化しました";
+};
+
+const toCustomNotificationPayload = (
+  title: string,
+  description: string,
+  keywords?: string[],
+): CustomNotificationPayload => ({
+  version: "1.0",
+  source: "custom",
+  content: {
+    textType: "client-markdown",
+    title,
+    description,
+    ...(keywords && keywords.length > 0 ? { keywords } : {}),
+  },
+});
+
+const snsClient = new SNSClient({});
+
+const publishSlackNotification = async (
+  topicArn: string,
+  payload: CustomNotificationPayload,
+): Promise<void> => {
+  await snsClient.send(
+    new PublishCommand({
+      TopicArn: topicArn,
+      Message: JSON.stringify(payload),
+    }),
+  );
 };
 
 const pushLineNotification = async (
@@ -227,11 +289,25 @@ export const handler: ScheduledHandler = async () => {
     return;
   }
 
-  await pushLineNotification(
-    env.LINE_CHANNEL_ACCESS_TOKEN,
-    env.LINE_GROUP_ID,
-    buildNotificationMessage(notifications, env.FRONTEND_URL),
+  const headline = buildNotificationHeadline(notifications);
+  const slackPayload = toCustomNotificationPayload(
+    `:rotating_light: 活動検知モニター ${headline} (${notifications.length}件)`,
+    buildSlackNotificationMessage(notifications, env.FRONTEND_URL),
+    ["活動検知モニター", "Transition", "Monitor"],
   );
+  const lineMessage = buildLineNotificationMessage(
+    notifications,
+    env.FRONTEND_URL,
+  );
+
+  await Promise.all([
+    publishSlackNotification(env.ALERT_TOPIC_ARN, slackPayload),
+    pushLineNotification(
+      env.LINE_CHANNEL_ACCESS_TOKEN,
+      env.LINE_GROUP_ID,
+      lineMessage,
+    ),
+  ]);
 
   console.log(
     JSON.stringify({

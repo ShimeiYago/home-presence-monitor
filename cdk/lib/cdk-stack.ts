@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import {
   aws_apigateway as apigateway,
+  aws_chatbot as chatbot,
   aws_certificatemanager as acm,
   aws_cloudfront as cloudfront,
   aws_cloudfront_origins as origins,
@@ -17,6 +18,7 @@ import {
   aws_route53_targets as route53Targets,
   aws_s3 as s3,
   aws_s3_deployment as s3deploy,
+  aws_sns as sns,
   CfnOutput,
   Duration,
   Fn,
@@ -171,6 +173,8 @@ export class CdkStack extends Stack {
 
     const basicAuthUsername = process.env.CLOUDFRONT_BASIC_AUTH_USERNAME;
     const basicAuthPassword = process.env.CLOUDFRONT_BASIC_AUTH_PASSWORD;
+    const slackChannelId = "C0AN31Z2ML7";
+    const slackWorkspaceId = "T0ANXC5475F";
     const lineChannelAccessToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
     const lineGroupId = process.env.LINE_GROUP_ID;
 
@@ -433,6 +437,21 @@ export class CdkStack extends Stack {
     activitiesTable.grantReadWriteData(apiFunction);
     monitorStatesTable.grantReadWriteData(apiFunction);
 
+    const monitorAlertTopic = new sns.Topic(this, "MonitorAlertTopic", {
+      topicName: `${siteNameKey}-monitor-alerts`,
+    });
+
+    new chatbot.SlackChannelConfiguration(this, "MonitorSlackChannel", {
+      slackChannelConfigurationName: `${siteNameKey}-monitor-alerts`,
+      slackWorkspaceId,
+      slackChannelId,
+      notificationTopics: [monitorAlertTopic],
+      loggingLevel: chatbot.LoggingLevel.ERROR,
+      guardrailPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName("ReadOnlyAccess"),
+      ],
+    });
+
     const monitorJobFunction = new lambdaNodejs.NodejsFunction(
       this,
       "MonitorJobFunction",
@@ -451,6 +470,7 @@ export class CdkStack extends Stack {
         },
         environment: {
           NODE_ENV: DDB_TABLE_ENV,
+          ALERT_TOPIC_ARN: monitorAlertTopic.topicArn,
           FRONTEND_URL: `https://${distribution.distributionDomainName}`,
           LINE_CHANNEL_ACCESS_TOKEN: lineChannelAccessToken,
           LINE_GROUP_ID: lineGroupId,
@@ -461,6 +481,7 @@ export class CdkStack extends Stack {
     heartbeatsTable.grantReadData(monitorJobFunction);
     activitiesTable.grantReadData(monitorJobFunction);
     monitorStatesTable.grantReadWriteData(monitorJobFunction);
+    monitorAlertTopic.grantPublish(monitorJobFunction);
 
     const monitorJobRule = new events.Rule(this, "MonitorJobRule", {
       schedule: events.Schedule.rate(Duration.minutes(10)),
