@@ -54,9 +54,11 @@ npm run ddb:local:bootstrap
 0. **One-time prep** – Edit `front/.env` and `cdk/site-config.json`.
    - No custom domain: keep `siteNameKey` only.
    - Custom domain: set `domainName`, `hostedZoneDomain`, and (optionally) `certificateArn`.
-1. **One-time prep** - Set Basic auth env vars in `cdk/.env` (example):
+1. **One-time prep** - Set deploy env vars in `cdk/.env` (example):
    - `CLOUDFRONT_BASIC_AUTH_USERNAME=your-user`
    - `CLOUDFRONT_BASIC_AUTH_PASSWORD=your-strong-password`
+   - `LINE_CHANNEL_ACCESS_TOKEN=your-line-channel-access-token`
+   - `LINE_GROUP_ID=your-line-group-id`
 2. Run `npm run deploy:cdk` to upload the assets, create/update the CloudFront distribution, and (if configured) publish the DNS records.
 
 The CDK deployment prints the CloudFront domain and S3 bucket name as stack outputs; use them for verification or DNS troubleshooting.

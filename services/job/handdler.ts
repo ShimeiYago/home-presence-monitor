@@ -1,5 +1,4 @@
 import type { ScheduledHandler } from "aws-lambda";
-import { PublishCommand, SNSClient } from "@aws-sdk/client-sns";
 import { z } from "zod";
 import { DEVICE_IDS } from "@home-presence-monitor/config/device";
 import { MONITOR_THRESHOLDS } from "@home-presence-monitor/config/monitor";
@@ -11,8 +10,9 @@ import {
 } from "@home-presence-monitor/db/schema/monitor-states";
 
 const envSchema = z.object({
-  ALERT_TOPIC_ARN: z.string().min(1),
   FRONTEND_URL: z.string().url(),
+  LINE_CHANNEL_ACCESS_TOKEN: z.string().min(1),
+  LINE_GROUP_ID: z.string().min(1),
 });
 
 type Env = z.infer<typeof envSchema>;
@@ -29,17 +29,6 @@ type TransitionNotification = {
   deviceId: string;
   transition: "初回異常" | "正常→異常" | "異常→正常";
   current: DeviceHealth;
-};
-
-type CustomNotificationPayload = {
-  version: "1.0";
-  source: "custom";
-  content: {
-    textType: "client-markdown";
-    title: string;
-    description: string;
-    keywords?: string[];
-  };
 };
 
 let cachedEnv: Env | undefined;
@@ -131,8 +120,10 @@ const buildNotificationMessage = (
   notifications: TransitionNotification[],
   frontendUrl: string,
 ): string => {
+  const headline = `活動検知モニター ${buildNotificationHeadline(notifications)} (${notifications.length}件)`;
   const lines: string[] = [];
-  lines.push(`<${frontendUrl}|ダッシュボード>`);
+  lines.push(headline);
+  lines.push(`ダッシュボード: ${frontendUrl}`);
   lines.push("");
 
   for (const item of notifications) {
@@ -161,32 +152,35 @@ const buildNotificationHeadline = (
   return "状態が正常/異常に変化しました";
 };
 
-const toCustomNotificationPayload = (
-  title: string,
-  description: string,
-  keywords?: string[],
-): CustomNotificationPayload => ({
-  version: "1.0",
-  source: "custom",
-  content: {
-    textType: "client-markdown",
-    title,
-    description,
-    ...(keywords && keywords.length > 0 ? { keywords } : {}),
-  },
-});
-
-const snsClient = new SNSClient({});
-
-const publishNotification = async (
-  topicArn: string,
-  payload: CustomNotificationPayload,
+const pushLineNotification = async (
+  channelAccessToken: string,
+  groupId: string,
+  text: string,
 ): Promise<void> => {
-  await snsClient.send(
-    new PublishCommand({
-      TopicArn: topicArn,
-      Message: JSON.stringify(payload),
+  const response = await fetch("https://api.line.me/v2/bot/message/push", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${channelAccessToken}`,
+    },
+    body: JSON.stringify({
+      to: groupId,
+      messages: [
+        {
+          type: "text",
+          text,
+        },
+      ],
     }),
+  });
+
+  if (response.ok) {
+    return;
+  }
+
+  const responseText = await response.text();
+  throw new Error(
+    `LINE push API request failed: ${response.status} ${response.statusText} ${responseText}`,
   );
 };
 
@@ -233,12 +227,11 @@ export const handler: ScheduledHandler = async () => {
     return;
   }
 
-  const transitionPayload = toCustomNotificationPayload(
-    `:rotating_light: 活動検知モニター ${buildNotificationHeadline(notifications)} (${notifications.length}件)`,
+  await pushLineNotification(
+    env.LINE_CHANNEL_ACCESS_TOKEN,
+    env.LINE_GROUP_ID,
     buildNotificationMessage(notifications, env.FRONTEND_URL),
-    ["活動検知モニター", "Transition", "Monitor"],
   );
-  await publishNotification(env.ALERT_TOPIC_ARN, transitionPayload);
 
   console.log(
     JSON.stringify({
