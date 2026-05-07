@@ -70,6 +70,8 @@ The CDK deployment prints the CloudFront domain and S3 bucket name as stack outp
 
 ## Raspberry Pi への配備
 
+複数 device を使う場合も構成は同じで、`device01` 用 Pi と `device02` 用 Pi をそれぞれ 1 台ずつ用意します。各 Pi で `services/pi/.env` の `DEVICE_ID` を切り替えるだけで、API / DynamoDB 上では別 device として記録されます。
+
 ### OS イメージの書き込み
 
 Raspberry Pi Imager で microSDに書き込む。
@@ -78,7 +80,7 @@ Raspberry Pi Imager で microSDに書き込む。
 - OS: Raspberry Pi OS Lite (32-bit)
 - Storage: microSDカードを選択
 - Customisation
-  - hostname: device01
+  - hostname: `device01` または `device02`
   - username: admin
   - password: (任意のパスワード)
   - WiFi (2.4GHzのWiFiを推奨)
@@ -155,8 +157,11 @@ cp .env.example .env
 
 6. `services/pi/.env` を環境に合わせて編集する
 
-- `API_URL`
+- `DEVICE_ID` (`device01` または `device02`)
+- `API_BASE_URL`
 - `API_KEY`
+
+device を 2 台にする場合は、2 台目の Pi でも同じ手順を繰り返し、`DEVICE_ID=device02` にして配備します。
 
 7. systemd unit を配置する
 

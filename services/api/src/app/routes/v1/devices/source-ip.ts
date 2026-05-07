@@ -2,13 +2,12 @@ import { Hono } from "hono";
 import { GetDeviceSourceIpResponse } from "@home-presence-monitor/contracts/api";
 import { getMonitorStateByDevice } from "@home-presence-monitor/db/schema/monitor-states";
 import { notFound } from "src/app/lib/errors";
-import { parseParams } from "src/app/lib/zod";
-import { deviceParamsSchema } from "./common";
+import { parseKnownDeviceId } from "./common";
 
 export const deviceSourceIpRoute = new Hono();
 
 deviceSourceIpRoute.get("/", async (c) => {
-  const { deviceId } = parseParams(c, deviceParamsSchema);
+  const deviceId = parseKnownDeviceId(c);
   const monitorState = await getMonitorStateByDevice({ deviceId });
 
   if (

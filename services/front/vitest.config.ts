@@ -5,8 +5,12 @@ export default defineConfig({
   resolve: {
     alias: [
       {
-        find: "src",
+        find: "@",
         replacement: resolve(__dirname, "src"),
+      },
+      {
+        find: /^@home-presence-monitor\/config\/(.*)$/,
+        replacement: resolve(__dirname, "../../packages/config") + "/$1",
       },
       {
         find: "@home-presence-monitor/contracts/api",
@@ -14,14 +18,6 @@ export default defineConfig({
           __dirname,
           "../../packages/contracts/api/index.ts",
         ),
-      },
-      {
-        find: /^@home-presence-monitor\/config\/(.*)$/,
-        replacement: resolve(__dirname, "../../packages/config") + "/$1",
-      },
-      {
-        find: /^@home-presence-monitor\/db\/(.*)$/,
-        replacement: resolve(__dirname, "../../packages/db/src") + "/$1",
       },
     ],
   },

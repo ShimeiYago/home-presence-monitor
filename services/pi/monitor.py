@@ -85,7 +85,7 @@ class Config:
     def from_env(cls) -> "Config":
         api_key = os.getenv("API_KEY", "").strip() or None
         config = cls(
-            device_id=env_str("DEVICE_ID", "device01"),
+            device_id=env_str("DEVICE_ID"),
             api_base_url=env_str("API_BASE_URL"),
             api_key=api_key,
             api_key_header=env_str("API_KEY_HEADER", "x-api-key"),

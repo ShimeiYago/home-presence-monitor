@@ -1,6 +1,6 @@
 import type { ScheduledHandler } from "aws-lambda";
 import { z } from "zod";
-import { DEVICE_IDS } from "@home-presence-monitor/config/device";
+import { DEVICES } from "@home-presence-monitor/config/device";
 import { MONITOR_THRESHOLDS } from "@home-presence-monitor/config/monitor";
 import { queryActivitiesByDeviceAndRange } from "@home-presence-monitor/db/schema/activities";
 import { queryLatestHeartbeatByDevice } from "@home-presence-monitor/db/schema/heartbeats";
@@ -8,6 +8,12 @@ import {
   getMonitorStateByDevice,
   updateMonitorEvaluation,
 } from "@home-presence-monitor/db/schema/monitor-states";
+import {
+  buildNotificationMessage,
+  transitionFromPrevious,
+  type DeviceHealth,
+  type TransitionNotification,
+} from "./notifications";
 
 const envSchema = z.object({
   FRONTEND_URL: z.string().url(),
@@ -16,20 +22,6 @@ const envSchema = z.object({
 });
 
 type Env = z.infer<typeof envSchema>;
-
-type DeviceHealth = {
-  deviceId: string;
-  isHealthy: boolean;
-  reason: string;
-  heartbeatAgeMinutes?: number;
-  activityTotal: number;
-};
-
-type TransitionNotification = {
-  deviceId: string;
-  transition: "初回異常" | "正常→異常" | "異常→正常";
-  current: DeviceHealth;
-};
 
 let cachedEnv: Env | undefined;
 
@@ -101,57 +93,6 @@ const evaluateDevice = async (
   };
 };
 
-const transitionFromPrevious = (
-  previousHealthy: boolean | undefined,
-  currentHealthy: boolean,
-): TransitionNotification["transition"] | undefined => {
-  if (previousHealthy === undefined) {
-    return currentHealthy ? undefined : "初回異常";
-  }
-
-  if (previousHealthy === currentHealthy) {
-    return undefined;
-  }
-
-  return previousHealthy ? "正常→異常" : "異常→正常";
-};
-
-const buildNotificationMessage = (
-  notifications: TransitionNotification[],
-  frontendUrl: string,
-): string => {
-  const headline = `活動検知モニター ${buildNotificationHeadline(notifications)} (${notifications.length}件)`;
-  const lines: string[] = [];
-  lines.push(headline);
-  lines.push(`ダッシュボード: ${frontendUrl}`);
-  lines.push("");
-
-  for (const item of notifications) {
-    lines.push(`- ${item.deviceId}: ${item.transition}`);
-    if (item.current.isHealthy) {
-      lines.push("  判定: 正常");
-    } else {
-      lines.push(`  判定: 異常あり / ${item.current.reason}`);
-    }
-  }
-
-  return lines.join("\n");
-};
-
-const buildNotificationHeadline = (
-  notifications: TransitionNotification[],
-): string => {
-  if (notifications.every((item) => item.current.isHealthy)) {
-    return "状態が正常になりました";
-  }
-
-  if (notifications.every((item) => !item.current.isHealthy)) {
-    return "状態が異常になりました";
-  }
-
-  return "状態が正常/異常に変化しました";
-};
-
 const pushLineNotification = async (
   channelAccessToken: string,
   groupId: string,
@@ -190,9 +131,9 @@ export const handler: ScheduledHandler = async () => {
   const nowIso = now.toISOString();
   const notifications: TransitionNotification[] = [];
 
-  for (const deviceId of DEVICE_IDS) {
-    const current = await evaluateDevice(deviceId, now);
-    const previous = await getMonitorStateByDevice({ deviceId });
+  for (const device of DEVICES) {
+    const current = await evaluateDevice(device.id, now);
+    const previous = await getMonitorStateByDevice({ deviceId: device.id });
     const transition = transitionFromPrevious(
       previous?.isHealthy,
       current.isHealthy,
@@ -200,14 +141,14 @@ export const handler: ScheduledHandler = async () => {
 
     if (transition) {
       notifications.push({
-        deviceId,
+        deviceId: device.id,
         transition,
         current,
       });
     }
 
     await updateMonitorEvaluation({
-      deviceId,
+      deviceId: device.id,
       isHealthy: current.isHealthy,
       updatedAt: nowIso,
       reason: current.reason,

@@ -46,4 +46,31 @@ describe("device heartbeats route", () => {
       observedAt: expect.any(String),
     });
   });
+
+  it("returns 404 for unknown devices", async () => {
+    const app = createApp();
+    const response = await app.request(
+      "/v1/devices/unknown-device/heartbeats",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          timestamp: "2026-05-02T00:00:00.000Z",
+        }),
+      },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(body).toEqual({
+      error: {
+        code: "NOT_FOUND",
+        message: "Device not found: unknown-device",
+      },
+    });
+    expect(putHeartbeatMock).not.toHaveBeenCalled();
+    expect(updateLatestObservedSourceIpMock).not.toHaveBeenCalled();
+  });
 });

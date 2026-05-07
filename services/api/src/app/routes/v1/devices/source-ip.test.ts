@@ -51,4 +51,21 @@ describe("device source ip route", () => {
       observedAt: "2026-05-02T01:23:45.000Z",
     });
   });
+
+  it("returns 404 for unknown devices before reading monitor state", async () => {
+    const app = createApp();
+    const response = await app.request("/v1/devices/unknown-device/source-ip", {
+      method: "GET",
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(body).toEqual({
+      error: {
+        code: "NOT_FOUND",
+        message: "Device not found: unknown-device",
+      },
+    });
+    expect(getMonitorStateByDeviceMock).not.toHaveBeenCalled();
+  });
 });

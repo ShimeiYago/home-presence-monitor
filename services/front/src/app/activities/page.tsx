@@ -1,22 +1,30 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Activity as ActivityIcon, ArrowLeft } from "lucide-react";
 import type { Activity } from "@home-presence-monitor/contracts/api";
-import { DEVICE_IDS } from "@home-presence-monitor/config/device";
+import { DeviceSelect } from "@/components/dashboard/device-select";
 import { TimeRangeFilter } from "@/components/dashboard/time-range-filter";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchActivities } from "@/lib/device-api";
+import {
+  hasMultipleDevices,
+  resolveSelectedDevice,
+} from "@/lib/device-selection";
 import { resolveApiConfig, type ApiConfig } from "@/lib/runtime-config";
 import { buildRange, type PresetKey } from "@/lib/time-range";
 import { formatJstDateTimeMinute } from "@/lib/time";
 
-export default function ActivitiesPage() {
-  const selectedDevice = DEVICE_IDS[0] ?? "";
+function ActivitiesPageContent() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const selectedDevice = resolveSelectedDevice(searchParams.get("deviceId"));
   const [selectedPreset, setSelectedPreset] = useState<PresetKey>("1h");
   const [records, setRecords] = useState<Activity[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -34,10 +42,6 @@ export default function ActivitiesPage() {
       setErrorMessage("NEXT_PUBLIC_API_KEY が設定されていません。");
       return;
     }
-    if (!selectedDevice) {
-      setErrorMessage("deviceId が見つかりません。");
-      return;
-    }
 
     setIsLoading(true);
     setErrorMessage(null);
@@ -46,7 +50,7 @@ export default function ActivitiesPage() {
       const response = await fetchActivities(
         apiConfig.apiBaseUrl,
         apiConfig.apiKey,
-        selectedDevice,
+        selectedDevice.id,
         buildRange(selectedPreset),
       );
       const sorted = [...response.activities].sort((a, b) =>
@@ -63,7 +67,12 @@ export default function ActivitiesPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [apiConfig.apiBaseUrl, apiConfig.apiKey, selectedDevice, selectedPreset]);
+  }, [
+    apiConfig.apiBaseUrl,
+    apiConfig.apiKey,
+    selectedDevice.id,
+    selectedPreset,
+  ]);
 
   useEffect(() => {
     const timerId = window.setTimeout(() => {
@@ -74,6 +83,12 @@ export default function ActivitiesPage() {
       window.clearTimeout(timerId);
     };
   }, [refresh]);
+
+  const handleDeviceChange = (deviceId: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("deviceId", deviceId);
+    router.replace(`${pathname}?${params.toString()}`);
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 via-slate-100 to-slate-200 px-4 py-8 text-slate-900 sm:px-6">
@@ -90,6 +105,9 @@ export default function ActivitiesPage() {
             <ActivityIcon className="h-7 w-7 text-slate-700" />
             <span>センサー記録</span>
           </h1>
+          <p className="text-sm text-slate-600">
+            {selectedDevice.name} ({selectedDevice.id}) の activity 一覧です。
+          </p>
         </header>
 
         {!isApiConfigured && (
@@ -110,11 +128,23 @@ export default function ActivitiesPage() {
         )}
 
         <Card className="rounded-2xl border-slate-200/80 p-4">
-          <TimeRangeFilter
-            value={selectedPreset}
-            onChange={setSelectedPreset}
-            disabled={isLoading}
-          />
+          <div className="grid gap-4 sm:grid-cols-2">
+            {hasMultipleDevices() && (
+              <DeviceSelect
+                value={selectedDevice.id}
+                onChange={handleDeviceChange}
+                disabled={isLoading}
+              />
+            )}
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-slate-700">期間</p>
+              <TimeRangeFilter
+                value={selectedPreset}
+                onChange={setSelectedPreset}
+                disabled={isLoading}
+              />
+            </div>
+          </div>
         </Card>
 
         {isLoading ? (
@@ -147,5 +177,17 @@ export default function ActivitiesPage() {
         )}
       </main>
     </div>
+  );
+}
+
+export default function ActivitiesPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gradient-to-b from-slate-50 via-slate-100 to-slate-200" />
+      }
+    >
+      <ActivitiesPageContent />
+    </Suspense>
   );
 }

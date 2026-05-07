@@ -18,6 +18,7 @@
       "@home-presence-monitor/contracts/api": [
         "../../packages/contracts/api/index.ts"
       ],
+      "@home-presence-monitor/config/*": ["../../packages/config/*"],
       "@home-presence-monitor/db/*": ["../../packages/db/src/*"]
     }
   },
