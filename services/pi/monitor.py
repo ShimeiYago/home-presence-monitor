@@ -11,10 +11,12 @@ from __future__ import annotations
 import dataclasses
 import logging
 import os
+import re
 import signal
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
@@ -29,6 +31,8 @@ else:
     GPIO_IMPORT_ERROR = None
 
 LOGGER = logging.getLogger("pi-monitor")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+MONITOR_CONFIG_TS_PATH = REPO_ROOT / "packages" / "config" / "monitor.ts"
 
 
 def utc_now() -> datetime:
@@ -68,6 +72,32 @@ def env_float(name: str, default: float) -> float:
         raise ValueError(f"Environment variable {name} must be float, got: {value}") from exc
 
 
+def read_ts_numeric_config(
+    file_path: Path,
+    export_name: str,
+    field_name: str,
+) -> float:
+    source = file_path.read_text(encoding="utf-8")
+    pattern = (
+        rf"export const {re.escape(export_name)} = \{{"
+        rf"(?P<body>.*?)"
+        rf"\}} as const;"
+    )
+    match = re.search(pattern, source, re.DOTALL)
+    if match is None:
+        raise ValueError(f"Config export not found: {export_name} in {file_path}")
+
+    body = match.group("body")
+    field_pattern = rf"{re.escape(field_name)}:\s*(?P<value>-?\d+(?:\.\d+)?)"
+    field_match = re.search(field_pattern, body)
+    if field_match is None:
+        raise ValueError(
+            f"Config field not found: {export_name}.{field_name} in {file_path}"
+        )
+
+    return float(field_match.group("value"))
+
+
 @dataclasses.dataclass(frozen=True)
 class Config:
     device_id: str
@@ -78,6 +108,8 @@ class Config:
     heartbeat_interval_sec: int
     motion_window_sec: int
     request_timeout_sec: int
+    post_max_attempts: int
+    post_retry_backoff_sec: float
     cooldown_sec: float
     log_level: str
 
@@ -93,6 +125,18 @@ class Config:
             heartbeat_interval_sec=env_int("HEARTBEAT_INTERVAL_SEC", 300),
             motion_window_sec=env_int("MOTION_WINDOW_SEC", 600),
             request_timeout_sec=env_int("REQUEST_TIMEOUT_SEC", 10),
+            post_max_attempts=int(
+                read_ts_numeric_config(
+                    MONITOR_CONFIG_TS_PATH,
+                    "PI_POST_RETRY_CONFIG",
+                    "maxAttempts",
+                )
+            ),
+            post_retry_backoff_sec=read_ts_numeric_config(
+                MONITOR_CONFIG_TS_PATH,
+                "PI_POST_RETRY_CONFIG",
+                "backoffSec",
+            ),
             cooldown_sec=env_float("COOLDOWN_SEC", 2.0),
             log_level=env_str("LOG_LEVEL", "INFO").upper(),
         )
@@ -103,6 +147,10 @@ class Config:
             raise ValueError("MOTION_WINDOW_SEC must be > 0")
         if config.request_timeout_sec <= 0:
             raise ValueError("REQUEST_TIMEOUT_SEC must be > 0")
+        if config.post_max_attempts <= 0:
+            raise ValueError("POST_MAX_ATTEMPTS must be > 0")
+        if config.post_retry_backoff_sec < 0:
+            raise ValueError("POST_RETRY_BACKOFF_SEC must be >= 0")
         if config.cooldown_sec < 0:
             raise ValueError("COOLDOWN_SEC must be >= 0")
         if config.api_key_header.strip() == "":
@@ -163,26 +211,71 @@ def post_json(
     url: str,
     payload: dict,
     timeout_sec: int,
+    max_attempts: int,
+    retry_backoff_sec: float,
 ) -> None:
-    try:
-        response = session.post(url, json=payload, timeout=timeout_sec)
-    except requests.RequestException as exc:
-        LOGGER.error("POST failed url=%s error=%s payload=%s", url, exc, payload)
-        return
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = session.post(url, json=payload, timeout=timeout_sec)
+        except requests.RequestException as exc:
+            if attempt >= max_attempts:
+                LOGGER.error(
+                    "POST failed url=%s attempt=%s/%s error=%s payload=%s",
+                    url,
+                    attempt,
+                    max_attempts,
+                    exc,
+                    payload,
+                )
+                return
 
-    if 200 <= response.status_code < 300:
-        LOGGER.info("POST ok url=%s status=%s payload=%s", url, response.status_code, payload)
-        return
+            LOGGER.warning(
+                "POST retrying after request error url=%s attempt=%s/%s error=%s payload=%s",
+                url,
+                attempt,
+                max_attempts,
+                exc,
+                payload,
+            )
+            time.sleep(retry_backoff_sec * attempt)
+            continue
 
-    body = response.text.strip()
-    body_preview = body[:500] if body else "(empty)"
-    LOGGER.warning(
-        "POST non-2xx url=%s status=%s body=%s payload=%s",
-        url,
-        response.status_code,
-        body_preview,
-        payload,
-    )
+        if 200 <= response.status_code < 300:
+            LOGGER.info(
+                "POST ok url=%s status=%s attempt=%s/%s payload=%s",
+                url,
+                response.status_code,
+                attempt,
+                max_attempts,
+                payload,
+            )
+            return
+
+        body = response.text.strip()
+        body_preview = body[:500] if body else "(empty)"
+        is_retriable_status = response.status_code == 429 or response.status_code >= 500
+        if not is_retriable_status or attempt >= max_attempts:
+            LOGGER.warning(
+                "POST non-2xx url=%s status=%s attempt=%s/%s body=%s payload=%s",
+                url,
+                response.status_code,
+                attempt,
+                max_attempts,
+                body_preview,
+                payload,
+            )
+            return
+
+        LOGGER.warning(
+            "POST retrying after non-2xx url=%s status=%s attempt=%s/%s body=%s payload=%s",
+            url,
+            response.status_code,
+            attempt,
+            max_attempts,
+            body_preview,
+            payload,
+        )
+        time.sleep(retry_backoff_sec * attempt)
 
 
 def heartbeat_loop(
@@ -193,7 +286,14 @@ def heartbeat_loop(
     next_run_monotonic = time.monotonic()
     while not stop_event.is_set():
         payload = {"timestamp": to_iso8601(utc_now())}
-        post_json(session, config.heartbeat_url, payload, config.request_timeout_sec)
+        post_json(
+            session,
+            config.heartbeat_url,
+            payload,
+            config.request_timeout_sec,
+            config.post_max_attempts,
+            config.post_retry_backoff_sec,
+        )
 
         next_run_monotonic += config.heartbeat_interval_sec
         wait_sec = max(0.0, next_run_monotonic - time.monotonic())
@@ -217,7 +317,14 @@ def activity_window_loop(
             "windowEnd": window_end,
             "motionCount": count_to_send,
         }
-        post_json(session, config.activities_url, payload, config.request_timeout_sec)
+        post_json(
+            session,
+            config.activities_url,
+            payload,
+            config.request_timeout_sec,
+            config.post_max_attempts,
+            config.post_retry_backoff_sec,
+        )
 
 
 def configure_logging(level_name: str) -> None:
@@ -239,9 +346,11 @@ def main() -> None:
 
     LOGGER.info("monitor start device_id=%s gpio_pin=%s", config.device_id, config.gpio_pin)
     LOGGER.info(
-        "heartbeat=%ss motion_window=%ss cooldown=%.2fs api=%s",
+        "heartbeat=%ss motion_window=%ss retry_attempts=%s retry_backoff=%.2fs cooldown=%.2fs api=%s",
         config.heartbeat_interval_sec,
         config.motion_window_sec,
+        config.post_max_attempts,
+        config.post_retry_backoff_sec,
         config.cooldown_sec,
         config.api_base_url,
     )
