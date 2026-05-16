@@ -3,21 +3,144 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Activity as ActivityIcon, ArrowLeft } from "lucide-react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import type { Activity } from "@home-presence-monitor/contracts/api";
 import { DEVICE_IDS } from "@home-presence-monitor/config/device";
-import { TimeRangeFilter } from "@/components/dashboard/time-range-filter";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchActivities } from "@/lib/device-api";
 import { resolveApiConfig, type ApiConfig } from "@/lib/runtime-config";
-import { buildRange, type PresetKey } from "@/lib/time-range";
-import { formatJstDateTimeMinute } from "@/lib/time";
+import type { TimeRange } from "@/lib/time-range";
+import {
+  floorIsoToJstHour,
+  formatJstDateTimeMinute,
+  formatJstHourMinute,
+  formatJstHourRange,
+  formatJstMonthDayHour,
+} from "@/lib/time";
+
+type ActivityRangePreset = "6h" | "24h" | "3d" | "7d";
+
+type ActivityChartDatum = {
+  bucketStart: string;
+  bucketEnd: string;
+  motionCount: number;
+  xLabel: string;
+  tooltipLabel: string;
+};
+
+const HOUR_MS = 60 * 60 * 1000;
+
+const ACTIVITY_PRESET_HOURS: Record<ActivityRangePreset, number> = {
+  "6h": 6,
+  "24h": 24,
+  "3d": 72,
+  "7d": 168,
+};
+
+const ACTIVITY_PRESET_LABELS: Record<ActivityRangePreset, string> = {
+  "6h": "6時間",
+  "24h": "24時間",
+  "3d": "3日",
+  "7d": "7日",
+};
+
+const ACTIVITY_PRESET_OPTIONS: ActivityRangePreset[] = [
+  "6h",
+  "24h",
+  "3d",
+  "7d",
+];
+
+const buildActivityRange = (preset: ActivityRangePreset): TimeRange => {
+  const to = new Date();
+  const from = new Date(
+    to.getTime() - ACTIVITY_PRESET_HOURS[preset] * 60 * 60 * 1000,
+  );
+
+  return {
+    from: from.toISOString(),
+    to: to.toISOString(),
+  };
+};
+
+const buildChartData = (
+  records: Activity[],
+  preset: ActivityRangePreset,
+): ActivityChartDatum[] => {
+  const sorted = [...records].sort((a, b) =>
+    a.windowStart.localeCompare(b.windowStart),
+  );
+
+  if (preset === "6h" || preset === "24h") {
+    return sorted.map((record) => ({
+      bucketStart: record.windowStart,
+      bucketEnd: record.windowEnd,
+      motionCount: record.motionCount,
+      xLabel: formatJstHourMinute(record.windowStart),
+      tooltipLabel: `${formatJstDateTimeMinute(record.windowStart)} - ${formatJstHourMinute(record.windowEnd)}`,
+    }));
+  }
+
+  const buckets = new Map<string, number>();
+  for (const record of sorted) {
+    const bucketStart = floorIsoToJstHour(record.windowStart);
+    buckets.set(
+      bucketStart,
+      (buckets.get(bucketStart) ?? 0) + record.motionCount,
+    );
+  }
+
+  return [...buckets.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([bucketStart, motionCount]) => ({
+      bucketStart,
+      bucketEnd: new Date(Date.parse(bucketStart) + HOUR_MS).toISOString(),
+      motionCount,
+      xLabel: formatJstMonthDayHour(bucketStart),
+      tooltipLabel: formatJstHourRange(bucketStart),
+    }));
+};
+
+function ActivityChartTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ value?: number; payload: ActivityChartDatum }>;
+}) {
+  const datum = payload?.[0]?.payload;
+  if (!active || !datum) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-lg">
+      <p className="text-sm font-medium text-slate-900">{datum.tooltipLabel}</p>
+      <p className="mt-1 text-sm text-slate-600">
+        センサー検知回数:{" "}
+        <span className="font-semibold text-slate-900">
+          {datum.motionCount}回
+        </span>
+      </p>
+    </div>
+  );
+}
 
 export default function ActivitiesPage() {
   const selectedDevice = DEVICE_IDS[0] ?? "";
-  const [selectedPreset, setSelectedPreset] = useState<PresetKey>("1h");
+  const [selectedPreset, setSelectedPreset] =
+    useState<ActivityRangePreset>("6h");
   const [records, setRecords] = useState<Activity[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -47,12 +170,9 @@ export default function ActivitiesPage() {
         apiConfig.apiBaseUrl,
         apiConfig.apiKey,
         selectedDevice,
-        buildRange(selectedPreset),
+        buildActivityRange(selectedPreset),
       );
-      const sorted = [...response.activities].sort((a, b) =>
-        b.windowStart.localeCompare(a.windowStart),
-      );
-      setRecords(sorted);
+      setRecords(response.activities);
     } catch (error) {
       setRecords([]);
       setErrorMessage(
@@ -74,6 +194,11 @@ export default function ActivitiesPage() {
       window.clearTimeout(timerId);
     };
   }, [refresh]);
+
+  const chartData = useMemo<ActivityChartDatum[]>(
+    () => buildChartData(records, selectedPreset),
+    [records, selectedPreset],
+  );
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 via-slate-100 to-slate-200 px-4 py-8 text-slate-900 sm:px-6">
@@ -109,41 +234,104 @@ export default function ActivitiesPage() {
           </Alert>
         )}
 
-        <Card className="rounded-2xl border-slate-200/80 p-4">
-          <TimeRangeFilter
-            value={selectedPreset}
-            onChange={setSelectedPreset}
-            disabled={isLoading}
-          />
+        <Card className="rounded-2xl border-slate-200/80 bg-white/90">
+          <CardHeader className="gap-3 p-4">
+            <CardTitle className="text-base font-semibold text-slate-900">
+              表示期間
+            </CardTitle>
+            <div className="flex flex-wrap gap-2">
+              {ACTIVITY_PRESET_OPTIONS.map((preset) => (
+                <Button
+                  key={preset}
+                  type="button"
+                  variant={selectedPreset === preset ? "default" : "outline"}
+                  className={
+                    selectedPreset === preset
+                      ? "bg-slate-900 text-white hover:bg-slate-800"
+                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                  }
+                  disabled={isLoading}
+                  onClick={() => setSelectedPreset(preset)}
+                >
+                  {ACTIVITY_PRESET_LABELS[preset]}
+                </Button>
+              ))}
+            </div>
+          </CardHeader>
         </Card>
 
         {isLoading ? (
-          <div className="space-y-3">
-            <Skeleton className="h-24 w-full rounded-xl" />
-            <Skeleton className="h-24 w-full rounded-xl" />
-            <Skeleton className="h-24 w-full rounded-xl" />
+          <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Skeleton className="h-28 w-full rounded-2xl" />
+              <Skeleton className="h-28 w-full rounded-2xl" />
+              <Skeleton className="h-28 w-full rounded-2xl" />
+            </div>
+            <Skeleton className="h-[360px] w-full rounded-2xl" />
           </div>
-        ) : records.length === 0 ? (
-          <p className="rounded-xl border border-slate-200/80 bg-white p-4 text-sm text-slate-600">
-            指定範囲に activity 記録はありません。
-          </p>
         ) : (
-          <ul className="space-y-3">
-            {records.map((record) => (
-              <li
-                key={`${record.windowStart}-${record.windowEnd}-${record.motionCount}`}
-                className="space-y-3 rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm"
-              >
-                <p className="text-sm font-medium text-slate-900">
-                  {formatJstDateTimeMinute(record.windowStart)} ~{" "}
-                  {formatJstDateTimeMinute(record.windowEnd)}
-                </p>
-                <Badge variant="outline">
-                  センサー検知回数: {record.motionCount}
-                </Badge>
-              </li>
-            ))}
-          </ul>
+          <>
+            <Card className="rounded-2xl border-slate-200/80 bg-white/95">
+              <CardHeader className="gap-2 p-4">
+                <CardTitle className="text-base font-semibold text-slate-900">
+                  時間帯ごとのセンサー検知
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-4 pt-0">
+                {chartData.length === 0 ? (
+                  <p className="rounded-xl border border-slate-200/80 bg-slate-50 p-4 text-sm text-slate-600">
+                    指定範囲に activity 記録はありません。
+                  </p>
+                ) : (
+                  <div className="h-[360px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={chartData}
+                        margin={{ top: 16, right: 12, left: 0, bottom: 12 }}
+                        barCategoryGap={selectedPreset === "6h" ? "20%" : "8%"}
+                      >
+                        <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" />
+                        <XAxis
+                          dataKey="xLabel"
+                          tickLine={false}
+                          axisLine={false}
+                          minTickGap={selectedPreset === "6h" ? 20 : 32}
+                          tick={{ fill: "#475569", fontSize: 12 }}
+                        />
+                        <YAxis
+                          allowDecimals={false}
+                          tickLine={false}
+                          axisLine={false}
+                          width={56}
+                          label={{
+                            value: "検知回数",
+                            angle: -90,
+                            position: "insideLeft",
+                            style: {
+                              textAnchor: "middle",
+                              fill: "#475569",
+                              fontSize: 12,
+                            },
+                          }}
+                          tick={{ fill: "#475569", fontSize: 12 }}
+                        />
+                        <Tooltip
+                          cursor={{ fill: "rgba(148, 163, 184, 0.14)" }}
+                          content={<ActivityChartTooltip />}
+                        />
+                        <Bar
+                          dataKey="motionCount"
+                          name="検知回数"
+                          fill="#0f766e"
+                          radius={[6, 6, 0, 0]}
+                        />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </>
         )}
       </main>
     </div>
