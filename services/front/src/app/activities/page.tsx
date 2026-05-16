@@ -29,7 +29,7 @@ import {
   formatJstMonthDayHour,
 } from "@/lib/time";
 
-type ActivityRangePreset = "6h" | "24h" | "3d" | "7d";
+type ActivityRangePreset = "6h" | "12h" | "24h" | "3d";
 
 type ActivityChartDatum = {
   bucketStart: string;
@@ -40,26 +40,41 @@ type ActivityChartDatum = {
 };
 
 const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+const JST_OFFSET_MS = 9 * HOUR_MS;
+
+const floorIsoToJstMinutes = (value: string, bucketMinutes: number): string => {
+  const timestampMs = Date.parse(value);
+  if (Number.isNaN(timestampMs)) {
+    return value;
+  }
+
+  const bucketMs = bucketMinutes * MINUTE_MS;
+  return new Date(
+    Math.floor((timestampMs + JST_OFFSET_MS) / bucketMs) * bucketMs -
+      JST_OFFSET_MS,
+  ).toISOString();
+};
 
 const ACTIVITY_PRESET_HOURS: Record<ActivityRangePreset, number> = {
   "6h": 6,
+  "12h": 12,
   "24h": 24,
   "3d": 72,
-  "7d": 168,
 };
 
 const ACTIVITY_PRESET_LABELS: Record<ActivityRangePreset, string> = {
   "6h": "6時間",
+  "12h": "12時間",
   "24h": "24時間",
   "3d": "3日",
-  "7d": "7日",
 };
 
 const ACTIVITY_PRESET_OPTIONS: ActivityRangePreset[] = [
   "6h",
+  "12h",
   "24h",
   "3d",
-  "7d",
 ];
 
 const buildActivityRange = (preset: ActivityRangePreset): TimeRange => {
@@ -82,7 +97,7 @@ const buildChartData = (
     a.windowStart.localeCompare(b.windowStart),
   );
 
-  if (preset === "6h" || preset === "24h") {
+  if (preset === "6h" || preset === "12h") {
     return sorted.map((record) => ({
       bucketStart: record.windowStart,
       bucketEnd: record.windowEnd,
@@ -90,6 +105,33 @@ const buildChartData = (
       xLabel: formatJstHourMinute(record.windowStart),
       tooltipLabel: `${formatJstDateTimeMinute(record.windowStart)} - ${formatJstHourMinute(record.windowEnd)}`,
     }));
+  }
+
+  if (preset === "24h") {
+    const buckets = new Map<string, number>();
+    for (const record of sorted) {
+      const bucketStart = floorIsoToJstMinutes(record.windowStart, 30);
+      buckets.set(
+        bucketStart,
+        (buckets.get(bucketStart) ?? 0) + record.motionCount,
+      );
+    }
+
+    return [...buckets.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([bucketStart, motionCount]) => {
+        const bucketEnd = new Date(
+          Date.parse(bucketStart) + 30 * MINUTE_MS,
+        ).toISOString();
+
+        return {
+          bucketStart,
+          bucketEnd,
+          motionCount,
+          xLabel: formatJstHourMinute(bucketStart),
+          tooltipLabel: `${formatJstDateTimeMinute(bucketStart)} - ${formatJstHourMinute(bucketEnd)}`,
+        };
+      });
   }
 
   const buckets = new Map<string, number>();
@@ -110,6 +152,37 @@ const buildChartData = (
       xLabel: formatJstMonthDayHour(bucketStart),
       tooltipLabel: formatJstHourRange(bucketStart),
     }));
+};
+
+const resolveChartScaleMax = (chartData: ActivityChartDatum[]): number => {
+  const firstDatum = chartData[0];
+  if (!firstDatum) {
+    return 10;
+  }
+
+  const bucketDurationMinutes = Math.max(
+    1,
+    Math.round(
+      (Date.parse(firstDatum.bucketEnd) - Date.parse(firstDatum.bucketStart)) /
+        MINUTE_MS,
+    ),
+  );
+
+  return bucketDurationMinutes;
+};
+
+const buildYAxisTicks = (chartScaleMax: number): number[] => {
+  if (chartScaleMax <= 10) {
+    return Array.from({ length: chartScaleMax + 1 }, (_, index) => index);
+  }
+
+  const ticks: number[] = [];
+  for (let value = 0; value < chartScaleMax; value += 10) {
+    ticks.push(value);
+  }
+  ticks.push(chartScaleMax);
+
+  return ticks;
 };
 
 function ActivityChartTooltip({
@@ -199,6 +272,24 @@ export default function ActivitiesPage() {
     () => buildChartData(records, selectedPreset),
     [records, selectedPreset],
   );
+  const chartScaleMax = useMemo<number>(
+    () => resolveChartScaleMax(chartData),
+    [chartData],
+  );
+  const displayChartData = useMemo<
+    Array<ActivityChartDatum & { chartMotionCount: number }>
+  >(
+    () =>
+      chartData.map((datum) => ({
+        ...datum,
+        chartMotionCount: Math.min(datum.motionCount, chartScaleMax),
+      })),
+    [chartData, chartScaleMax],
+  );
+  const yAxisTicks = useMemo<number[]>(
+    () => buildYAxisTicks(chartScaleMax),
+    [chartScaleMax],
+  );
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 via-slate-100 to-slate-200 px-4 py-8 text-slate-900 sm:px-6">
@@ -286,7 +377,7 @@ export default function ActivitiesPage() {
                   <div className="h-[360px] w-full">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart
-                        data={chartData}
+                        data={displayChartData}
                         margin={{ top: 16, right: 12, left: 0, bottom: 12 }}
                         barCategoryGap={selectedPreset === "6h" ? "20%" : "8%"}
                       >
@@ -299,6 +390,14 @@ export default function ActivitiesPage() {
                           tick={{ fill: "#475569", fontSize: 12 }}
                         />
                         <YAxis
+                          domain={[0, chartScaleMax]}
+                          ticks={yAxisTicks}
+                          interval={0}
+                          tickFormatter={(value: number) =>
+                            value >= chartScaleMax
+                              ? `${chartScaleMax}以上`
+                              : String(value)
+                          }
                           allowDecimals={false}
                           tickLine={false}
                           axisLine={false}
@@ -320,7 +419,7 @@ export default function ActivitiesPage() {
                           content={<ActivityChartTooltip />}
                         />
                         <Bar
-                          dataKey="motionCount"
+                          dataKey="chartMotionCount"
                           name="検知回数"
                           fill="#0f766e"
                           radius={[6, 6, 0, 0]}
