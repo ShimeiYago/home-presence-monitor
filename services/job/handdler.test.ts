@@ -235,6 +235,33 @@ describe("monitor job handler", () => {
     expect(published.content?.description).toContain("device01");
   });
 
+  it("uses the last closed 10-minute window even when invoked mid-minute", async () => {
+    vi.setSystemTime(new Date("2026-06-07T01:10:42.000Z"));
+
+    mockSingleDeviceScenario({
+      previousState: {
+        deviceId: "device01",
+        isHealthy: false,
+        consecutiveNonDetectionCount: 6,
+      },
+      heartbeat: makeHeartbeat({
+        timestamp: "2026-06-07T01:10:00.000Z",
+        createdAt: "2026-06-07T01:10:00.000Z",
+      }),
+      activities: [makeActivity(4)],
+    });
+
+    await handler({} as never, {} as never, vi.fn());
+
+    expect(queryActivitiesByDeviceAndRangeMock).toHaveBeenCalledWith({
+      deviceId: "device01",
+      from: "2026-06-07T01:00:00.000Z",
+      to: "2026-06-07T01:10:00.000Z",
+    });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not resend a transition that is already recorded as notified", async () => {
     mockSingleDeviceScenario({
       previousState: {

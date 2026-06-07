@@ -69,6 +69,9 @@ const minutesSince = (value: string, nowMs: number): number => {
   return Math.max(0, Math.floor(deltaMs / 60000));
 };
 
+const floorToIntervalMs = (valueMs: number, intervalMs: number): number =>
+  Math.floor(valueMs / intervalMs) * intervalMs;
+
 const isNotificationWindow = (now: Date): boolean => {
   const jstHour = (now.getUTCHours() + 9) % 24;
   return (
@@ -84,16 +87,18 @@ const evaluateDevice = async (
 ): Promise<DeviceHealth> => {
   const nowMs = now.getTime();
   const nowIso = now.toISOString();
-  const fromIso = new Date(
-    nowMs - MONITOR_THRESHOLDS.sensorActivityWindowMinutes * 60 * 1000,
-  ).toISOString();
+  const windowMs = MONITOR_THRESHOLDS.sensorActivityWindowMinutes * 60 * 1000;
+  const windowEndMs = floorToIntervalMs(nowMs, windowMs);
+  const windowStartMs = windowEndMs - windowMs;
+  const fromIso = new Date(windowStartMs).toISOString();
+  const toIso = new Date(windowEndMs).toISOString();
 
   const [latestHeartbeat, activities] = await Promise.all([
     queryLatestHeartbeatByDevice({ deviceId }),
     queryActivitiesByDeviceAndRange({
       deviceId,
       from: fromIso,
-      to: nowIso,
+      to: toIso,
     }),
   ]);
 
