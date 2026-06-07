@@ -28,6 +28,7 @@ type DeviceHealth = {
   heartbeatAgeMinutes?: number;
   activityTotal: number;
   consecutiveNonDetectionCount: number;
+  transitionVersion: number;
 };
 
 type TransitionType = "異常発生" | "正常復旧";
@@ -134,6 +135,12 @@ const evaluateDevice = async (
   const sensorHealthy =
     consecutiveNonDetectionCount <
     MONITOR_THRESHOLDS.sensorConsecutiveNonDetectionAlertThreshold;
+  const currentHealthy = heartbeatHealthy && sensorHealthy;
+  const previousTransitionVersion = previous?.transitionVersion ?? 0;
+  const transitionVersion =
+    previous?.isHealthy !== undefined && previous.isHealthy !== currentHealthy
+      ? previousTransitionVersion + 1
+      : previousTransitionVersion;
 
   if (!sensorHealthy) {
     reasons.push(
@@ -143,11 +150,12 @@ const evaluateDevice = async (
 
   return {
     deviceId,
-    isHealthy: heartbeatHealthy && sensorHealthy,
+    isHealthy: currentHealthy,
     reason: reasons.length === 0 ? "正常" : reasons.join(" / "),
     heartbeatAgeMinutes,
     activityTotal,
     consecutiveNonDetectionCount,
+    transitionVersion,
   };
 };
 
@@ -369,11 +377,30 @@ export const handler: ScheduledHandler = async () => {
       heartbeatAgeMinutes: current.heartbeatAgeMinutes,
       activityTotal: current.activityTotal,
       consecutiveNonDetectionCount: current.consecutiveNonDetectionCount,
+      transitionVersion: current.transitionVersion,
+      ...(transition === undefined
+        ? {}
+        : {
+            lastNotifiedTransitionVersion: current.transitionVersion,
+          }),
     });
   }
 
-  if (notifications.length === 0) {
+  try {
     await persistEvaluations(evaluations);
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        timestamp: nowIso,
+        level: "error",
+        message: "monitor_transition_persist_failed",
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    throw error;
+  }
+
+  if (notifications.length === 0) {
     console.log(
       JSON.stringify({
         timestamp: nowIso,
@@ -385,7 +412,6 @@ export const handler: ScheduledHandler = async () => {
   }
 
   if (!isNotificationWindow(now)) {
-    await persistEvaluations(evaluations);
     console.log(
       JSON.stringify({
         timestamp: nowIso,
@@ -420,8 +446,6 @@ export const handler: ScheduledHandler = async () => {
     );
     throw error;
   }
-
-  await persistEvaluations(evaluations);
 
   console.log(
     JSON.stringify({

@@ -50,6 +50,8 @@ type MonitorStateMock = {
   deviceId: string;
   isHealthy?: boolean;
   consecutiveNonDetectionCount?: number;
+  transitionVersion?: number;
+  lastNotifiedTransitionVersion?: number;
   updatedAt?: string;
   reason?: string;
   heartbeatAgeMinutes?: number;
@@ -233,6 +235,33 @@ describe("monitor job handler", () => {
     expect(published.content?.description).toContain("device01");
   });
 
+  it("does not resend a transition that is already recorded as notified", async () => {
+    mockSingleDeviceScenario({
+      previousState: {
+        deviceId: "device01",
+        isHealthy: true,
+        consecutiveNonDetectionCount: 0,
+        transitionVersion: 1,
+        lastNotifiedTransitionVersion: 1,
+      },
+      heartbeat: makeHeartbeat(),
+      activities: [makeActivity(3)],
+    });
+
+    await handler({} as never, {} as never, vi.fn());
+
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(updateMonitorEvaluationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceId: "device01",
+        isHealthy: true,
+        transitionVersion: 1,
+        activityTotal: 3,
+      }),
+    );
+  });
+
   it("skips notifications outside the JST notification window", async () => {
     vi.setSystemTime(new Date("2026-06-07T15:10:00.000Z"));
 
@@ -315,7 +344,7 @@ describe("monitor job handler", () => {
     expect(updateMonitorEvaluationMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not persist the new state when notification delivery fails", async () => {
+  it("persists the new state before notification delivery fails", async () => {
     mockSingleDeviceScenario({
       previousState: {
         deviceId: "device01",
@@ -338,6 +367,7 @@ describe("monitor job handler", () => {
     );
 
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(updateMonitorEvaluationMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(updateMonitorEvaluationMock).toHaveBeenCalledTimes(1);
   });
 });

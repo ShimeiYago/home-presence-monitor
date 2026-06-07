@@ -10,6 +10,8 @@ export type MonitorStateRecord = {
   heartbeatAgeMinutes?: number;
   activityTotal?: number;
   consecutiveNonDetectionCount?: number;
+  transitionVersion?: number;
+  lastNotifiedTransitionVersion?: number;
   lastObservedSourceIp?: string;
   lastObservedSourceIpAt?: string;
 };
@@ -24,6 +26,8 @@ export type MonitorStateItem = {
   heartbeatAgeMinutes?: number;
   activityTotal?: number;
   consecutiveNonDetectionCount?: number;
+  transitionVersion?: number;
+  lastNotifiedTransitionVersion?: number;
   lastObservedSourceIp?: string;
   lastObservedSourceIpAt?: string;
 };
@@ -36,6 +40,8 @@ export type MonitorEvaluationUpdate = {
   heartbeatAgeMinutes?: number;
   activityTotal: number;
   consecutiveNonDetectionCount: number;
+  transitionVersion: number;
+  lastNotifiedTransitionVersion?: number;
 };
 
 export type LatestObservedSourceIpUpdate = {
@@ -76,6 +82,11 @@ export const parseMonitorStateRecord = (
     item,
     "consecutiveNonDetectionCount",
   );
+  const transitionVersion = readNumber(item, "transitionVersion");
+  const lastNotifiedTransitionVersion = readNumber(
+    item,
+    "lastNotifiedTransitionVersion",
+  );
   const lastObservedSourceIp = readString(item, "lastObservedSourceIp");
   const lastObservedSourceIpAt = readString(item, "lastObservedSourceIpAt");
 
@@ -102,6 +113,10 @@ export const parseMonitorStateRecord = (
     ...(consecutiveNonDetectionCount === undefined
       ? {}
       : { consecutiveNonDetectionCount }),
+    ...(transitionVersion === undefined ? {} : { transitionVersion }),
+    ...(lastNotifiedTransitionVersion === undefined
+      ? {}
+      : { lastNotifiedTransitionVersion }),
     ...(lastObservedSourceIp === undefined ? {} : { lastObservedSourceIp }),
     ...(lastObservedSourceIpAt === undefined ? {} : { lastObservedSourceIpAt }),
   };
@@ -126,6 +141,14 @@ export const buildMonitorStateItem = (
     ? {}
     : {
         consecutiveNonDetectionCount: record.consecutiveNonDetectionCount,
+      }),
+  ...(record.transitionVersion === undefined
+    ? {}
+    : { transitionVersion: record.transitionVersion }),
+  ...(record.lastNotifiedTransitionVersion === undefined
+    ? {}
+    : {
+        lastNotifiedTransitionVersion: record.lastNotifiedTransitionVersion,
       }),
   ...(record.lastObservedSourceIp === undefined
     ? {}
@@ -193,6 +216,12 @@ export const updateMonitorEvaluation = async (
       reason: record.reason,
       activityTotal: record.activityTotal,
       consecutiveNonDetectionCount: record.consecutiveNonDetectionCount,
+      transitionVersion: record.transitionVersion,
+      ...(record.lastNotifiedTransitionVersion === undefined
+        ? {}
+        : {
+            lastNotifiedTransitionVersion: record.lastNotifiedTransitionVersion,
+          }),
       ...(record.heartbeatAgeMinutes === undefined
         ? {}
         : { heartbeatAgeMinutes: record.heartbeatAgeMinutes }),
