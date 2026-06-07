@@ -7,6 +7,7 @@ import { queryActivitiesByDeviceAndRange } from "@home-presence-monitor/db/schem
 import { queryLatestHeartbeatByDevice } from "@home-presence-monitor/db/schema/heartbeats";
 import {
   getMonitorStateByDevice,
+  type MonitorEvaluationUpdate,
   updateMonitorEvaluation,
 } from "@home-presence-monitor/db/schema/monitor-states";
 
@@ -251,6 +252,7 @@ export const handler: ScheduledHandler = async () => {
   const now = new Date();
   const nowIso = now.toISOString();
   const notifications: TransitionNotification[] = [];
+  const evaluations: MonitorEvaluationUpdate[] = [];
 
   for (const deviceId of DEVICE_IDS) {
     const current = await evaluateDevice(deviceId, now);
@@ -268,7 +270,7 @@ export const handler: ScheduledHandler = async () => {
       });
     }
 
-    await updateMonitorEvaluation({
+    evaluations.push({
       deviceId,
       isHealthy: current.isHealthy,
       updatedAt: nowIso,
@@ -279,6 +281,9 @@ export const handler: ScheduledHandler = async () => {
   }
 
   if (notifications.length === 0) {
+    await Promise.all(
+      evaluations.map((record) => updateMonitorEvaluation(record)),
+    );
     console.log(
       JSON.stringify({
         timestamp: nowIso,
@@ -300,14 +305,30 @@ export const handler: ScheduledHandler = async () => {
     env.FRONTEND_URL,
   );
 
-  await Promise.all([
-    publishSlackNotification(env.ALERT_TOPIC_ARN, slackPayload),
-    pushLineNotification(
-      env.LINE_CHANNEL_ACCESS_TOKEN,
-      env.LINE_GROUP_ID,
-      lineMessage,
-    ),
-  ]);
+  try {
+    await Promise.all([
+      publishSlackNotification(env.ALERT_TOPIC_ARN, slackPayload),
+      pushLineNotification(
+        env.LINE_CHANNEL_ACCESS_TOKEN,
+        env.LINE_GROUP_ID,
+        lineMessage,
+      ),
+    ]);
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        timestamp: nowIso,
+        level: "error",
+        message: "monitor_transition_notify_failed",
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    throw error;
+  }
+
+  await Promise.all(
+    evaluations.map((record) => updateMonitorEvaluation(record)),
+  );
 
   console.log(
     JSON.stringify({
