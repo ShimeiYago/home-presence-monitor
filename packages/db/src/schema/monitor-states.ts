@@ -9,6 +9,7 @@ export type MonitorStateRecord = {
   reason?: string;
   heartbeatAgeMinutes?: number;
   activityTotal?: number;
+  consecutiveNonDetectionCount?: number;
   lastObservedSourceIp?: string;
   lastObservedSourceIpAt?: string;
 };
@@ -22,6 +23,7 @@ export type MonitorStateItem = {
   reason?: string;
   heartbeatAgeMinutes?: number;
   activityTotal?: number;
+  consecutiveNonDetectionCount?: number;
   lastObservedSourceIp?: string;
   lastObservedSourceIpAt?: string;
 };
@@ -33,6 +35,7 @@ export type MonitorEvaluationUpdate = {
   reason: string;
   heartbeatAgeMinutes?: number;
   activityTotal: number;
+  consecutiveNonDetectionCount: number;
 };
 
 export type LatestObservedSourceIpUpdate = {
@@ -69,6 +72,10 @@ export const parseMonitorStateRecord = (
   const reason = readString(item, "reason");
   const heartbeatAgeMinutes = readNumber(item, "heartbeatAgeMinutes");
   const activityTotal = readNumber(item, "activityTotal");
+  const consecutiveNonDetectionCount = readNumber(
+    item,
+    "consecutiveNonDetectionCount",
+  );
   const lastObservedSourceIp = readString(item, "lastObservedSourceIp");
   const lastObservedSourceIpAt = readString(item, "lastObservedSourceIpAt");
 
@@ -92,6 +99,9 @@ export const parseMonitorStateRecord = (
     ...(reason === undefined ? {} : { reason }),
     ...(heartbeatAgeMinutes === undefined ? {} : { heartbeatAgeMinutes }),
     ...(activityTotal === undefined ? {} : { activityTotal }),
+    ...(consecutiveNonDetectionCount === undefined
+      ? {}
+      : { consecutiveNonDetectionCount }),
     ...(lastObservedSourceIp === undefined ? {} : { lastObservedSourceIp }),
     ...(lastObservedSourceIpAt === undefined ? {} : { lastObservedSourceIpAt }),
   };
@@ -112,6 +122,11 @@ export const buildMonitorStateItem = (
   ...(record.activityTotal === undefined
     ? {}
     : { activityTotal: record.activityTotal }),
+  ...(record.consecutiveNonDetectionCount === undefined
+    ? {}
+    : {
+        consecutiveNonDetectionCount: record.consecutiveNonDetectionCount,
+      }),
   ...(record.lastObservedSourceIp === undefined
     ? {}
     : { lastObservedSourceIp: record.lastObservedSourceIp }),
@@ -177,6 +192,7 @@ export const updateMonitorEvaluation = async (
       updatedAt: record.updatedAt,
       reason: record.reason,
       activityTotal: record.activityTotal,
+      consecutiveNonDetectionCount: record.consecutiveNonDetectionCount,
       ...(record.heartbeatAgeMinutes === undefined
         ? {}
         : { heartbeatAgeMinutes: record.heartbeatAgeMinutes }),

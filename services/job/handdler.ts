@@ -8,6 +8,7 @@ import { queryLatestHeartbeatByDevice } from "@home-presence-monitor/db/schema/h
 import {
   getMonitorStateByDevice,
   type MonitorEvaluationUpdate,
+  type MonitorStateRecord,
   updateMonitorEvaluation,
 } from "@home-presence-monitor/db/schema/monitor-states";
 
@@ -26,11 +27,14 @@ type DeviceHealth = {
   reason: string;
   heartbeatAgeMinutes?: number;
   activityTotal: number;
+  consecutiveNonDetectionCount: number;
 };
+
+type TransitionType = "異常発生" | "正常復旧";
 
 type TransitionNotification = {
   deviceId: string;
-  transition: "初回異常" | "正常→異常" | "異常→正常";
+  transition: TransitionType;
   current: DeviceHealth;
 };
 
@@ -64,13 +68,24 @@ const minutesSince = (value: string, nowMs: number): number => {
   return Math.max(0, Math.floor(deltaMs / 60000));
 };
 
+const isNotificationWindow = (now: Date): boolean => {
+  const jstHour = (now.getUTCHours() + 9) % 24;
+  return (
+    jstHour >= MONITOR_THRESHOLDS.notificationQuietHoursStartHourJst &&
+    jstHour <= MONITOR_THRESHOLDS.notificationQuietHoursEndHourJst
+  );
+};
+
 const evaluateDevice = async (
   deviceId: string,
+  previous: MonitorStateRecord | undefined,
   now: Date,
 ): Promise<DeviceHealth> => {
   const nowMs = now.getTime();
   const nowIso = now.toISOString();
-  const fromIso = new Date(nowMs - 60 * 60 * 1000).toISOString();
+  const fromIso = new Date(
+    nowMs - MONITOR_THRESHOLDS.sensorActivityWindowMinutes * 60 * 1000,
+  ).toISOString();
 
   const [latestHeartbeat, activities] = await Promise.all([
     queryLatestHeartbeatByDevice({ deviceId }),
@@ -85,67 +100,121 @@ const evaluateDevice = async (
   let heartbeatAgeMinutes: number | undefined;
   const heartbeatRuleText = `${MONITOR_THRESHOLDS.heartbeatStaleMinutes}分以上未受信で異常`;
 
-  if (!latestHeartbeat) {
-    reasons.push(`ラズパイ状態は未記録です（${heartbeatRuleText}）`);
-  } else {
+  const heartbeatHealthy = (() => {
+    if (!latestHeartbeat) {
+      reasons.push(`ラズパイ状態は未記録です（${heartbeatRuleText}）`);
+      return false;
+    }
+
     heartbeatAgeMinutes = minutesSince(latestHeartbeat.timestamp, nowMs);
     if (heartbeatAgeMinutes > MONITOR_THRESHOLDS.heartbeatStaleMinutes) {
       reasons.push(
         `ラズパイ状態: 最終受信から${heartbeatAgeMinutes}分（${heartbeatRuleText}）`,
       );
+      return false;
     }
-  }
+
+    return true;
+  })();
 
   const activityTotal = activities.reduce(
     (sum, activity) => sum + activity.motionCount,
     0,
   );
-  if (activityTotal <= MONITOR_THRESHOLDS.sensorMotionCountAlertThreshold) {
+  const sensorDetected =
+    activityTotal >= MONITOR_THRESHOLDS.sensorMotionCountHealthyThreshold;
+  const previousConsecutiveNonDetectionCount =
+    previous?.consecutiveNonDetectionCount ??
+    (previous?.isHealthy === false && previous.reason?.includes("センサー記録")
+      ? MONITOR_THRESHOLDS.sensorConsecutiveNonDetectionAlertThreshold
+      : 0);
+  const consecutiveNonDetectionCount = sensorDetected
+    ? 0
+    : previousConsecutiveNonDetectionCount + 1;
+  const sensorHealthy =
+    consecutiveNonDetectionCount <
+    MONITOR_THRESHOLDS.sensorConsecutiveNonDetectionAlertThreshold;
+
+  if (!sensorHealthy) {
     reasons.push(
-      `センサー記録: 直近1時間のセンサー検知回数 ${activityTotal}回（閾値${MONITOR_THRESHOLDS.sensorMotionCountAlertThreshold}回超過で正常）`,
+      `センサー記録: 直近${MONITOR_THRESHOLDS.sensorActivityWindowMinutes}分のセンサー検知回数 ${activityTotal}回（生存条件 ${MONITOR_THRESHOLDS.sensorMotionCountHealthyThreshold}回以上 / 連続非検出 ${consecutiveNonDetectionCount}/${MONITOR_THRESHOLDS.sensorConsecutiveNonDetectionAlertThreshold}回）`,
     );
   }
 
   return {
     deviceId,
-    isHealthy: reasons.length === 0,
+    isHealthy: heartbeatHealthy && sensorHealthy,
     reason: reasons.length === 0 ? "正常" : reasons.join(" / "),
     heartbeatAgeMinutes,
     activityTotal,
+    consecutiveNonDetectionCount,
   };
 };
 
 const transitionFromPrevious = (
   previousHealthy: boolean | undefined,
   currentHealthy: boolean,
-): TransitionNotification["transition"] | undefined => {
+): TransitionType | undefined => {
   if (previousHealthy === undefined) {
-    return currentHealthy ? undefined : "初回異常";
+    return undefined;
   }
 
   if (previousHealthy === currentHealthy) {
     return undefined;
   }
 
-  return previousHealthy ? "正常→異常" : "異常→正常";
+  return currentHealthy ? "正常復旧" : "異常発生";
+};
+
+const buildNotificationBatches = (
+  notifications: TransitionNotification[],
+): Array<{
+  title: TransitionType;
+  items: TransitionNotification[];
+}> => {
+  const abnormal = notifications.filter(
+    (item) => item.transition === "異常発生",
+  );
+  const recovery = notifications.filter(
+    (item) => item.transition === "正常復旧",
+  );
+
+  return [
+    ...(abnormal.length > 0
+      ? [
+          {
+            title: "異常発生" as const,
+            items: abnormal,
+          },
+        ]
+      : []),
+    ...(recovery.length > 0
+      ? [
+          {
+            title: "正常復旧" as const,
+            items: recovery,
+          },
+        ]
+      : []),
+  ];
 };
 
 const buildLineNotificationMessage = (
+  title: TransitionType,
   notifications: TransitionNotification[],
   frontendUrl: string,
 ): string => {
-  const headline = `活動検知モニター ${buildNotificationHeadline(notifications)} (${notifications.length}件)`;
   const lines: string[] = [];
-  lines.push(headline);
+  lines.push(title);
   lines.push(`ダッシュボード: ${frontendUrl}`);
   lines.push("");
 
   for (const item of notifications) {
     lines.push(`- ${item.deviceId}: ${item.transition}`);
-    if (item.current.isHealthy) {
-      lines.push("  判定: 正常");
-    } else {
+    if (item.transition === "異常発生") {
       lines.push(`  判定: 異常あり / ${item.current.reason}`);
+    } else {
+      lines.push("  判定: 正常");
     }
   }
 
@@ -153,37 +222,25 @@ const buildLineNotificationMessage = (
 };
 
 const buildSlackNotificationMessage = (
+  title: TransitionType,
   notifications: TransitionNotification[],
   frontendUrl: string,
 ): string => {
   const lines: string[] = [];
+  lines.push(title);
   lines.push(`<${frontendUrl}|ダッシュボード>`);
   lines.push("");
 
   for (const item of notifications) {
     lines.push(`- ${item.deviceId}: ${item.transition}`);
-    if (item.current.isHealthy) {
-      lines.push("  判定: 正常");
-    } else {
+    if (item.transition === "異常発生") {
       lines.push(`  判定: 異常あり / ${item.current.reason}`);
+    } else {
+      lines.push("  判定: 正常");
     }
   }
 
   return lines.join("\n");
-};
-
-const buildNotificationHeadline = (
-  notifications: TransitionNotification[],
-): string => {
-  if (notifications.every((item) => item.current.isHealthy)) {
-    return "状態が正常になりました";
-  }
-
-  if (notifications.every((item) => !item.current.isHealthy)) {
-    return "状態が異常になりました";
-  }
-
-  return "状態が正常/異常に変化しました";
 };
 
 const toCustomNotificationPayload = (
@@ -247,6 +304,38 @@ const pushLineNotification = async (
   );
 };
 
+const sendNotificationBatch = async (
+  batch: { title: TransitionType; items: TransitionNotification[] },
+  frontendUrl: string,
+  alertTopicArn: string,
+  lineChannelAccessToken: string,
+  lineGroupId: string,
+): Promise<void> => {
+  const slackPayload = toCustomNotificationPayload(
+    batch.title,
+    buildSlackNotificationMessage(batch.title, batch.items, frontendUrl),
+    ["活動検知モニター", batch.title, "Monitor"],
+  );
+  const lineMessage = buildLineNotificationMessage(
+    batch.title,
+    batch.items,
+    frontendUrl,
+  );
+
+  await Promise.all([
+    publishSlackNotification(alertTopicArn, slackPayload),
+    pushLineNotification(lineChannelAccessToken, lineGroupId, lineMessage),
+  ]);
+};
+
+const persistEvaluations = async (
+  evaluations: MonitorEvaluationUpdate[],
+): Promise<void> => {
+  await Promise.all(
+    evaluations.map((record) => updateMonitorEvaluation(record)),
+  );
+};
+
 export const handler: ScheduledHandler = async () => {
   const env = getEnv();
   const now = new Date();
@@ -255,10 +344,12 @@ export const handler: ScheduledHandler = async () => {
   const evaluations: MonitorEvaluationUpdate[] = [];
 
   for (const deviceId of DEVICE_IDS) {
-    const current = await evaluateDevice(deviceId, now);
     const previous = await getMonitorStateByDevice({ deviceId });
+    const current = await evaluateDevice(deviceId, previous, now);
+
+    const previousHealthy = previous?.isHealthy;
     const transition = transitionFromPrevious(
-      previous?.isHealthy,
+      previousHealthy,
       current.isHealthy,
     );
 
@@ -277,13 +368,12 @@ export const handler: ScheduledHandler = async () => {
       reason: current.reason,
       heartbeatAgeMinutes: current.heartbeatAgeMinutes,
       activityTotal: current.activityTotal,
+      consecutiveNonDetectionCount: current.consecutiveNonDetectionCount,
     });
   }
 
   if (notifications.length === 0) {
-    await Promise.all(
-      evaluations.map((record) => updateMonitorEvaluation(record)),
-    );
+    await persistEvaluations(evaluations);
     console.log(
       JSON.stringify({
         timestamp: nowIso,
@@ -294,26 +384,31 @@ export const handler: ScheduledHandler = async () => {
     return;
   }
 
-  const headline = buildNotificationHeadline(notifications);
-  const slackPayload = toCustomNotificationPayload(
-    `:rotating_light: 活動検知モニター ${headline} (${notifications.length}件)`,
-    buildSlackNotificationMessage(notifications, env.FRONTEND_URL),
-    ["活動検知モニター", "Transition", "Monitor"],
-  );
-  const lineMessage = buildLineNotificationMessage(
-    notifications,
-    env.FRONTEND_URL,
-  );
+  if (!isNotificationWindow(now)) {
+    await persistEvaluations(evaluations);
+    console.log(
+      JSON.stringify({
+        timestamp: nowIso,
+        level: "info",
+        message: "monitor_transition_suppressed_quiet_hours",
+        count: notifications.length,
+      }),
+    );
+    return;
+  }
+
+  const notificationBatches = buildNotificationBatches(notifications);
 
   try {
-    await Promise.all([
-      publishSlackNotification(env.ALERT_TOPIC_ARN, slackPayload),
-      pushLineNotification(
+    for (const batch of notificationBatches) {
+      await sendNotificationBatch(
+        batch,
+        env.FRONTEND_URL,
+        env.ALERT_TOPIC_ARN,
         env.LINE_CHANNEL_ACCESS_TOKEN,
         env.LINE_GROUP_ID,
-        lineMessage,
-      ),
-    ]);
+      );
+    }
   } catch (error) {
     console.error(
       JSON.stringify({
@@ -326,9 +421,7 @@ export const handler: ScheduledHandler = async () => {
     throw error;
   }
 
-  await Promise.all(
-    evaluations.map((record) => updateMonitorEvaluation(record)),
-  );
+  await persistEvaluations(evaluations);
 
   console.log(
     JSON.stringify({
