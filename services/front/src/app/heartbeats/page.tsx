@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, Cpu } from "lucide-react";
 import { TimeRangeFilter } from "@/components/dashboard/time-range-filter";
@@ -25,7 +25,43 @@ type HeartbeatListItem = {
   timestamp: string;
 };
 
-export default function HeartbeatsPage() {
+function HeartbeatsPageFallback() {
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 via-slate-100 to-slate-200 px-4 py-8 text-slate-900 sm:px-6">
+      <main className="mx-auto flex w-full max-w-3xl flex-col gap-6">
+        <header className="space-y-3">
+          <Link
+            href="/"
+            className="inline-flex items-center gap-1 text-sm font-medium text-slate-600 hover:text-slate-900"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            ダッシュボードに戻る
+          </Link>
+          <h1 className="flex items-center gap-2 text-3xl font-semibold tracking-tight">
+            <Cpu className="h-7 w-7 text-slate-700" />
+            <span>ラズパイ状態</span>
+          </h1>
+        </header>
+
+        <Card className="space-y-4 rounded-2xl border-slate-200/80 p-4">
+          <div className="space-y-2">
+            <Skeleton className="h-5 w-24" />
+            <Skeleton className="h-10 w-full rounded-md" />
+          </div>
+          <Skeleton className="h-10 w-full rounded-md" />
+        </Card>
+
+        <div className="space-y-3">
+          <Skeleton className="h-20 w-full rounded-xl" />
+          <Skeleton className="h-20 w-full rounded-xl" />
+          <Skeleton className="h-20 w-full rounded-xl" />
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function HeartbeatsPageContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -185,5 +221,13 @@ export default function HeartbeatsPage() {
         )}
       </main>
     </div>
+  );
+}
+
+export default function HeartbeatsPage() {
+  return (
+    <Suspense fallback={<HeartbeatsPageFallback />}>
+      <HeartbeatsPageContent />
+    </Suspense>
   );
 }

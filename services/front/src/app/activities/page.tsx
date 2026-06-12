@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Activity as ActivityIcon, ArrowLeft } from "lucide-react";
 import {
@@ -218,7 +218,51 @@ function ActivityChartTooltip({
   );
 }
 
-export default function ActivitiesPage() {
+function ActivitiesPageFallback() {
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 via-slate-100 to-slate-200 px-4 py-8 text-slate-900 sm:px-6">
+      <main className="mx-auto flex w-full max-w-3xl flex-col gap-6">
+        <header className="space-y-3">
+          <Link
+            href="/"
+            className="inline-flex items-center gap-1 text-sm font-medium text-slate-600 hover:text-slate-900"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            ダッシュボードに戻る
+          </Link>
+          <h1 className="flex items-center gap-2 text-3xl font-semibold tracking-tight">
+            <ActivityIcon className="h-7 w-7 text-slate-700" />
+            <span>センサー記録</span>
+          </h1>
+        </header>
+
+        <Card className="rounded-2xl border-slate-200/80 bg-white/90">
+          <CardHeader className="gap-4 p-4">
+            <Skeleton className="h-6 w-28" />
+            <Skeleton className="h-10 w-full rounded-md" />
+            <Skeleton className="h-6 w-24" />
+            <div className="flex flex-wrap gap-2">
+              <Skeleton className="h-10 w-20 rounded-md" />
+              <Skeleton className="h-10 w-20 rounded-md" />
+              <Skeleton className="h-10 w-20 rounded-md" />
+            </div>
+          </CardHeader>
+        </Card>
+
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Skeleton className="h-28 w-full rounded-2xl" />
+            <Skeleton className="h-28 w-full rounded-2xl" />
+            <Skeleton className="h-28 w-full rounded-2xl" />
+          </div>
+          <Skeleton className="h-[360px] w-full rounded-2xl" />
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function ActivitiesPageContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -478,5 +522,13 @@ export default function ActivitiesPage() {
         )}
       </main>
     </div>
+  );
+}
+
+export default function ActivitiesPage() {
+  return (
+    <Suspense fallback={<ActivitiesPageFallback />}>
+      <ActivitiesPageContent />
+    </Suspense>
   );
 }
