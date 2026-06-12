@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { Activity, Cpu, House, Router } from "lucide-react";
 import type {
   Activity as ActivityRecord,
@@ -11,20 +10,13 @@ import { MONITOR_THRESHOLDS } from "@home-presence-monitor/config/monitor";
 import { OverviewCard } from "@/components/dashboard/overview-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   fetchActivities,
   fetchDeviceSourceIp,
   fetchLatestHeartbeat,
 } from "@/lib/device-api";
-import { buildDeviceDetailHref, DEVICES } from "@/lib/devices";
+import { DEVICES } from "@/lib/devices";
 import { resolveApiConfig, type ApiConfig } from "@/lib/runtime-config";
 import { formatJstDateTimeMinute, minutesSince } from "@/lib/time";
 
@@ -119,6 +111,45 @@ const summarizeHouseMotion = (
   };
 };
 
+const summarizeHeartbeatStatus = (
+  summary: DeviceSummary,
+): CardStatus & { ageMinutes?: number } => {
+  const heartbeatRuleText = `${MONITOR_THRESHOLDS.heartbeatStaleMinutes}分以上未受信で異常`;
+
+  if (summary.heartbeatFetchFailed) {
+    return {
+      label: "取得失敗",
+      isAlert: true,
+      detail: "heartbeat の取得に失敗しました",
+    };
+  }
+
+  if (!summary.latestHeartbeatAt) {
+    return {
+      label: "異常あり",
+      isAlert: true,
+      detail: `heartbeat は未記録です（${heartbeatRuleText}）`,
+    };
+  }
+
+  const ageMinutes = minutesSince(summary.latestHeartbeatAt);
+  if (ageMinutes > MONITOR_THRESHOLDS.heartbeatStaleMinutes) {
+    return {
+      label: "異常あり",
+      isAlert: true,
+      detail: `最終受信から${ageMinutes}分（${heartbeatRuleText}）`,
+      ageMinutes,
+    };
+  }
+
+  return {
+    label: "正常",
+    isAlert: false,
+    detail: `最終受信から${ageMinutes}分（${heartbeatRuleText}）`,
+    ageMinutes,
+  };
+};
+
 export default function Home() {
   const [deviceSummaries, setDeviceSummaries] = useState<DeviceSummary[]>([]);
   const [houseMotionSummary, setHouseMotionSummary] =
@@ -178,11 +209,6 @@ export default function Home() {
         const recordsByDevice: ActivityRecord[][] = [];
 
         for (const result of results) {
-          const heartbeatFetchFailed =
-            result.heartbeatResult.status === "rejected";
-          const sourceIpFetchFailed =
-            result.sourceIpResult.status === "rejected";
-
           nextDeviceSummaries.push({
             deviceId: result.device.id,
             label: result.device.label,
@@ -190,12 +216,12 @@ export default function Home() {
               result.heartbeatResult.status === "fulfilled"
                 ? (result.heartbeatResult.value?.lastHeartbeatAt ?? null)
                 : null,
-            heartbeatFetchFailed,
+            heartbeatFetchFailed: result.heartbeatResult.status === "rejected",
             sourceIpSummary:
               result.sourceIpResult.status === "fulfilled"
                 ? result.sourceIpResult.value
                 : null,
-            sourceIpFetchFailed,
+            sourceIpFetchFailed: result.sourceIpResult.status === "rejected",
           });
 
           if (result.activitiesResult.status === "fulfilled") {
@@ -242,6 +268,54 @@ export default function Home() {
     };
   }, [apiConfig.apiBaseUrl, apiConfig.apiKey]);
 
+  const heartbeatSummaries = useMemo(
+    () =>
+      deviceSummaries.map((summary) => ({
+        ...summary,
+        status: summarizeHeartbeatStatus(summary),
+      })),
+    [deviceSummaries],
+  );
+
+  const heartbeatStatus = useMemo<CardStatus>(() => {
+    if (isLoading && heartbeatSummaries.length === 0) {
+      return {
+        label: "確認中",
+        isAlert: false,
+        detail: "各デバイスの heartbeat を取得中です",
+      };
+    }
+
+    if (heartbeatSummaries.length === 0) {
+      return {
+        label: "異常あり",
+        isAlert: true,
+        detail: "heartbeat 情報を取得できませんでした",
+      };
+    }
+
+    const alertDevices = heartbeatSummaries.filter(
+      (summary) => summary.status.isAlert,
+    );
+    if (alertDevices.length > 0) {
+      return {
+        label: "異常あり",
+        isAlert: true,
+        detail: alertDevices
+          .map((summary) => `${summary.label}: ${summary.status.detail}`)
+          .join(" / "),
+      };
+    }
+
+    return {
+      label: "正常",
+      isAlert: false,
+      detail: heartbeatSummaries
+        .map((summary) => `${summary.label}: ${summary.status.detail}`)
+        .join(" / "),
+    };
+  }, [heartbeatSummaries, isLoading]);
+
   const houseMotionStatus = useMemo<CardStatus>(() => {
     const ruleText = `直近${MONITOR_THRESHOLDS.sensorActivityWindowMinutes}分の合計 ${MONITOR_THRESHOLDS.sensorMotionCountHealthyThreshold}回以上で正常`;
 
@@ -261,20 +335,80 @@ export default function Home() {
       };
     }
 
-    if (!houseMotionSummary.isHealthy) {
+    return {
+      label: houseMotionSummary.isHealthy ? "正常" : "異常あり",
+      isAlert: !houseMotionSummary.isHealthy,
+      detail: `直近${MONITOR_THRESHOLDS.sensorActivityWindowMinutes}分 ${houseMotionSummary.lastWindowMotionTotal}回 / 連続非検出 ${houseMotionSummary.consecutiveNonDetectionCount}/${MONITOR_THRESHOLDS.sensorConsecutiveNonDetectionAlertThreshold}回（${ruleText}）`,
+    };
+  }, [houseMotionSummary, isLoading]);
+
+  const sourceIpStatus = useMemo<CardStatus>(() => {
+    if (isLoading && deviceSummaries.length === 0) {
       return {
-        label: "異常あり",
+        label: "確認中",
+        isAlert: false,
+        detail: "各デバイスの送信元IPを取得中です",
+      };
+    }
+
+    if (deviceSummaries.length === 0) {
+      return {
+        label: "未記録",
         isAlert: true,
-        detail: `直近${MONITOR_THRESHOLDS.sensorActivityWindowMinutes}分 ${houseMotionSummary.lastWindowMotionTotal}回 / 連続非検出 ${houseMotionSummary.consecutiveNonDetectionCount}/${MONITOR_THRESHOLDS.sensorConsecutiveNonDetectionAlertThreshold}回（${ruleText}）`,
+        detail: "送信元IP情報を取得できませんでした",
+      };
+    }
+
+    const hasFetchFailure = deviceSummaries.some(
+      (summary) => summary.sourceIpFetchFailed,
+    );
+    const missingSourceIpCount = deviceSummaries.filter(
+      (summary) => !summary.sourceIpFetchFailed && !summary.sourceIpSummary,
+    ).length;
+
+    if (!hasFetchFailure && missingSourceIpCount === 0) {
+      return {
+        label: "記録あり",
+        isAlert: false,
+        detail: "各デバイスの最新送信元IPを表示しています",
       };
     }
 
     return {
-      label: "正常",
-      isAlert: false,
-      detail: `直近${MONITOR_THRESHOLDS.sensorActivityWindowMinutes}分 ${houseMotionSummary.lastWindowMotionTotal}回 / 連続非検出 ${houseMotionSummary.consecutiveNonDetectionCount}/${MONITOR_THRESHOLDS.sensorConsecutiveNonDetectionAlertThreshold}回（${ruleText}）`,
+      label: "未記録",
+      isAlert: true,
+      detail: "未記録または取得失敗のデバイスがあります",
     };
-  }, [houseMotionSummary, isLoading]);
+  }, [deviceSummaries, isLoading]);
+
+  const sourceIpLines = useMemo(
+    () =>
+      deviceSummaries.map((summary) => {
+        if (summary.sourceIpFetchFailed) {
+          return `${summary.label}: 取得失敗`;
+        }
+
+        if (!summary.sourceIpSummary) {
+          return `${summary.label}: 未記録`;
+        }
+
+        return `${summary.label}: ${summary.sourceIpSummary.sourceIp}`;
+      }),
+    [deviceSummaries],
+  );
+
+  const heartbeatPrimary =
+    isLoading && heartbeatSummaries.length === 0 ? (
+      <Skeleton className="h-8 w-32" />
+    ) : (
+      <span
+        className={
+          heartbeatStatus.isAlert ? "text-red-600" : "text-emerald-600"
+        }
+      >
+        {heartbeatStatus.isAlert ? "異常あり" : "全デバイス正常"}
+      </span>
+    );
 
   const houseMotionPrimary =
     isLoading && !houseMotionSummary ? (
@@ -289,9 +423,28 @@ export default function Home() {
       </span>
     );
 
+  const sourceIpPrimary =
+    isLoading && deviceSummaries.length === 0 ? (
+      <div className="space-y-2">
+        <Skeleton className="h-6 w-40" />
+        <Skeleton className="h-6 w-40" />
+      </div>
+    ) : (
+      <>
+        {sourceIpLines.map((line) => (
+          <span
+            key={line}
+            className="block text-base font-medium leading-7 text-slate-900"
+          >
+            {line}
+          </span>
+        ))}
+      </>
+    );
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 via-slate-100 to-slate-200 px-4 py-8 text-slate-900 sm:px-6">
-      <main className="mx-auto flex w-full max-w-5xl flex-col gap-6">
+      <main className="mx-auto flex w-full max-w-3xl flex-col gap-6">
         <header className="flex items-center gap-3">
           <House className="h-7 w-7 text-slate-700" />
           <h1 className="text-3xl font-semibold tracking-tight">
@@ -320,9 +473,26 @@ export default function Home() {
 
         <section className="space-y-4">
           <OverviewCard
-            title="家全体の活動"
+            title="ラズパイ状態"
+            titleIcon={<Cpu className="h-5 w-5 text-slate-600" />}
+            status={
+              heartbeatStatus.isAlert ? (
+                <Badge variant="destructive">{heartbeatStatus.label}</Badge>
+              ) : (
+                <Badge className="border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-600">
+                  {heartbeatStatus.label}
+                </Badge>
+              )
+            }
+            primary={heartbeatPrimary}
+            secondary={heartbeatStatus.detail}
+            href="/heartbeats"
+          />
+
+          <OverviewCard
+            title="センサー記録"
             titleIcon={<Activity className="h-5 w-5 text-slate-600" />}
-            description="直近1時間の合計センサー検知回数"
+            description="直近1時間の家全体センサー検知回数"
             status={
               houseMotionStatus.isAlert ? (
                 <Badge variant="destructive">{houseMotionStatus.label}</Badge>
@@ -334,157 +504,23 @@ export default function Home() {
             }
             primary={houseMotionPrimary}
             secondary={houseMotionStatus.detail}
+            href="/activities"
           />
-        </section>
 
-        <section className="grid gap-4 lg:grid-cols-2">
-          {deviceSummaries.map((summary) => {
-            const heartbeatStatus = (() => {
-              const heartbeatRuleText = `${MONITOR_THRESHOLDS.heartbeatStaleMinutes}分以上未受信で異常`;
-
-              if (summary.heartbeatFetchFailed) {
-                return {
-                  label: "取得失敗",
-                  isAlert: true,
-                  detail: "heartbeat の取得に失敗しました",
-                } satisfies CardStatus;
-              }
-
-              if (!summary.latestHeartbeatAt) {
-                return {
-                  label: "異常あり",
-                  isAlert: true,
-                  detail: `heartbeat は未記録です（${heartbeatRuleText}）`,
-                } satisfies CardStatus;
-              }
-
-              const ageMinutes = minutesSince(summary.latestHeartbeatAt);
-              if (ageMinutes > MONITOR_THRESHOLDS.heartbeatStaleMinutes) {
-                return {
-                  label: "異常あり",
-                  isAlert: true,
-                  detail: `最終受信から${ageMinutes}分（${heartbeatRuleText}）`,
-                } satisfies CardStatus;
-              }
-
-              return {
-                label: "正常",
-                isAlert: false,
-                detail: `最終受信から${ageMinutes}分（${heartbeatRuleText}）`,
-              } satisfies CardStatus;
-            })();
-
-            const sourceIpText = summary.sourceIpFetchFailed
-              ? "取得失敗"
-              : (summary.sourceIpSummary?.sourceIp ?? "未記録");
-            const sourceIpDetail = summary.sourceIpFetchFailed
-              ? "送信元IPの取得に失敗しました"
-              : summary.sourceIpSummary
-                ? `最終観測: ${formatJstDateTimeMinute(summary.sourceIpSummary.observedAt)} JST`
-                : "heartbeat 受信時の送信元IPはまだ記録されていません";
-
-            return (
-              <Card
-                key={summary.deviceId}
-                className="rounded-2xl border-slate-200/80 bg-white/95 shadow-sm"
-              >
-                <CardHeader className="gap-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <CardTitle className="text-lg font-semibold text-slate-900">
-                        {summary.label}
-                      </CardTitle>
-                      <CardDescription>{summary.deviceId}</CardDescription>
-                    </div>
-                    {heartbeatStatus.isAlert ? (
-                      <Badge variant="destructive">
-                        {heartbeatStatus.label}
-                      </Badge>
-                    ) : (
-                      <Badge className="border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-600">
-                        {heartbeatStatus.label}
-                      </Badge>
-                    )}
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="rounded-xl border border-slate-200/80 bg-slate-50 p-4">
-                      <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">
-                        <span className="inline-flex items-center gap-2">
-                          <Cpu className="h-4 w-4" />
-                          Heartbeat
-                        </span>
-                      </p>
-                      <p className="mt-3 text-lg font-semibold text-slate-900">
-                        {summary.latestHeartbeatAt
-                          ? formatJstDateTimeMinute(summary.latestHeartbeatAt)
-                          : "未記録"}
-                      </p>
-                      <p className="mt-1 text-sm text-slate-600">
-                        {heartbeatStatus.detail}
-                      </p>
-                    </div>
-
-                    <div className="rounded-xl border border-slate-200/80 bg-slate-50 p-4">
-                      <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">
-                        <span className="inline-flex items-center gap-2">
-                          <Router className="h-4 w-4" />
-                          Source IP
-                        </span>
-                      </p>
-                      <p className="mt-3 text-lg font-semibold text-slate-900">
-                        {sourceIpText}
-                      </p>
-                      <p className="mt-1 text-sm text-slate-600">
-                        {sourceIpDetail}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap gap-3">
-                    <Link
-                      href={buildDeviceDetailHref(
-                        "/heartbeats",
-                        summary.deviceId,
-                      )}
-                      className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 hover:text-slate-900"
-                    >
-                      Heartbeat履歴
-                    </Link>
-                    <Link
-                      href={buildDeviceDetailHref(
-                        "/activities",
-                        summary.deviceId,
-                      )}
-                      className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 hover:text-slate-900"
-                    >
-                      Activity履歴
-                    </Link>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-
-          {isLoading &&
-            deviceSummaries.length === 0 &&
-            DEVICES.map((device) => (
-              <Card
-                key={device.id}
-                className="rounded-2xl border-slate-200/80 bg-white/95 shadow-sm"
-              >
-                <CardHeader className="gap-3">
-                  <Skeleton className="h-6 w-32" />
-                  <Skeleton className="h-4 w-24" />
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <Skeleton className="h-24 w-full rounded-xl" />
-                  <Skeleton className="h-24 w-full rounded-xl" />
-                  <Skeleton className="h-10 w-44 rounded-xl" />
-                </CardContent>
-              </Card>
-            ))}
+          <OverviewCard
+            title="送信元ルーターIP"
+            titleIcon={<Router className="h-5 w-5 text-slate-600" />}
+            status={
+              sourceIpStatus.isAlert ? (
+                <Badge variant="destructive">{sourceIpStatus.label}</Badge>
+              ) : (
+                <Badge className="border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-600">
+                  {sourceIpStatus.label}
+                </Badge>
+              )
+            }
+            primary={sourceIpPrimary}
+          />
         </section>
       </main>
     </div>
