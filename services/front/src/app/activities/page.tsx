@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Activity as ActivityIcon, ArrowLeft } from "lucide-react";
 import {
   Bar,
@@ -13,12 +14,19 @@ import {
   YAxis,
 } from "recharts";
 import type { Activity } from "@home-presence-monitor/contracts/api";
-import { DEVICE_IDS } from "@home-presence-monitor/config/device";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchActivities } from "@/lib/device-api";
+import { DEVICES, resolveDeviceFromQueryParam } from "@/lib/devices";
 import { resolveApiConfig, type ApiConfig } from "@/lib/runtime-config";
 import type { TimeRange } from "@/lib/time-range";
 import {
@@ -211,7 +219,13 @@ function ActivityChartTooltip({
 }
 
 export default function ActivitiesPage() {
-  const selectedDevice = DEVICE_IDS[0] ?? "";
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const selectedDevice = useMemo(
+    () => resolveDeviceFromQueryParam(searchParams.get("deviceId")),
+    [searchParams],
+  );
   const [selectedPreset, setSelectedPreset] =
     useState<ActivityRangePreset>("6h");
   const [records, setRecords] = useState<Activity[]>([]);
@@ -221,52 +235,51 @@ export default function ActivitiesPage() {
 
   const isApiConfigured = Boolean(apiConfig.apiBaseUrl && apiConfig.apiKey);
 
-  const refresh = useCallback(async () => {
-    if (!apiConfig.apiBaseUrl) {
-      setErrorMessage("NEXT_PUBLIC_API_BASE_URL が設定されていません。");
-      return;
-    }
-    if (!apiConfig.apiKey) {
-      setErrorMessage("NEXT_PUBLIC_API_KEY が設定されていません。");
-      return;
-    }
-    if (!selectedDevice) {
-      setErrorMessage("deviceId が見つかりません。");
-      return;
-    }
-
-    setIsLoading(true);
-    setErrorMessage(null);
-
-    try {
-      const response = await fetchActivities(
-        apiConfig.apiBaseUrl,
-        apiConfig.apiKey,
-        selectedDevice,
-        buildActivityRange(selectedPreset),
-      );
-      setRecords(response.activities);
-    } catch (error) {
-      setRecords([]);
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "activities の取得に失敗しました。",
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  }, [apiConfig.apiBaseUrl, apiConfig.apiKey, selectedDevice, selectedPreset]);
-
   useEffect(() => {
     const timerId = window.setTimeout(() => {
-      void refresh();
+      void (async () => {
+        if (!apiConfig.apiBaseUrl) {
+          setErrorMessage("NEXT_PUBLIC_API_BASE_URL が設定されていません。");
+          return;
+        }
+        if (!apiConfig.apiKey) {
+          setErrorMessage("NEXT_PUBLIC_API_KEY が設定されていません。");
+          return;
+        }
+
+        setIsLoading(true);
+        setErrorMessage(null);
+
+        try {
+          const response = await fetchActivities(
+            apiConfig.apiBaseUrl,
+            apiConfig.apiKey,
+            selectedDevice.id,
+            buildActivityRange(selectedPreset),
+          );
+          setRecords(response.activities);
+        } catch (error) {
+          setRecords([]);
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : "activities の取得に失敗しました。",
+          );
+        } finally {
+          setIsLoading(false);
+        }
+      })();
     }, 0);
 
     return () => {
       window.clearTimeout(timerId);
     };
-  }, [refresh]);
+  }, [
+    apiConfig.apiBaseUrl,
+    apiConfig.apiKey,
+    selectedDevice.id,
+    selectedPreset,
+  ]);
 
   const chartData = useMemo<ActivityChartDatum[]>(
     () => buildChartData(records, selectedPreset),
@@ -291,6 +304,12 @@ export default function ActivitiesPage() {
     [chartScaleMax],
   );
 
+  const handleDeviceChange = (deviceId: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("deviceId", deviceId);
+    router.replace(`${pathname}?${params.toString()}`);
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 via-slate-100 to-slate-200 px-4 py-8 text-slate-900 sm:px-6">
       <main className="mx-auto flex w-full max-w-3xl flex-col gap-6">
@@ -306,6 +325,9 @@ export default function ActivitiesPage() {
             <ActivityIcon className="h-7 w-7 text-slate-700" />
             <span>センサー記録</span>
           </h1>
+          <p className="text-sm text-slate-600">
+            表示中: {selectedDevice.label} ({selectedDevice.id})
+          </p>
         </header>
 
         {!isApiConfigured && (
@@ -326,27 +348,51 @@ export default function ActivitiesPage() {
         )}
 
         <Card className="rounded-2xl border-slate-200/80 bg-white/90">
-          <CardHeader className="gap-3 p-4">
-            <CardTitle className="text-base font-semibold text-slate-900">
-              表示期間
-            </CardTitle>
-            <div className="flex flex-wrap gap-2">
-              {ACTIVITY_PRESET_OPTIONS.map((preset) => (
-                <Button
-                  key={preset}
-                  type="button"
-                  variant={selectedPreset === preset ? "default" : "outline"}
-                  className={
-                    selectedPreset === preset
-                      ? "bg-slate-900 text-white hover:bg-slate-800"
-                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                  }
-                  disabled={isLoading}
-                  onClick={() => setSelectedPreset(preset)}
-                >
-                  {ACTIVITY_PRESET_LABELS[preset]}
-                </Button>
-              ))}
+          <CardHeader className="gap-4 p-4">
+            <div className="space-y-2">
+              <CardTitle className="text-base font-semibold text-slate-900">
+                対象デバイス
+              </CardTitle>
+              <Select
+                value={selectedDevice.id}
+                onValueChange={handleDeviceChange}
+                disabled={isLoading}
+              >
+                <SelectTrigger className="border-slate-300 bg-white text-slate-900">
+                  <SelectValue placeholder="デバイスを選択" />
+                </SelectTrigger>
+                <SelectContent>
+                  {DEVICES.map((device) => (
+                    <SelectItem key={device.id} value={device.id}>
+                      {device.label} ({device.id})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <CardTitle className="text-base font-semibold text-slate-900">
+                表示期間
+              </CardTitle>
+              <div className="flex flex-wrap gap-2">
+                {ACTIVITY_PRESET_OPTIONS.map((preset) => (
+                  <Button
+                    key={preset}
+                    type="button"
+                    variant={selectedPreset === preset ? "default" : "outline"}
+                    className={
+                      selectedPreset === preset
+                        ? "bg-slate-900 text-white hover:bg-slate-800"
+                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                    }
+                    disabled={isLoading}
+                    onClick={() => setSelectedPreset(preset)}
+                  >
+                    {ACTIVITY_PRESET_LABELS[preset]}
+                  </Button>
+                ))}
+              </div>
             </div>
           </CardHeader>
         </Card>
@@ -361,76 +407,74 @@ export default function ActivitiesPage() {
             <Skeleton className="h-[360px] w-full rounded-2xl" />
           </div>
         ) : (
-          <>
-            <Card className="rounded-2xl border-slate-200/80 bg-white/95">
-              <CardHeader className="gap-2 p-4">
-                <CardTitle className="text-base font-semibold text-slate-900">
-                  時間帯ごとのセンサー検知
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-4 pt-0">
-                {chartData.length === 0 ? (
-                  <p className="rounded-xl border border-slate-200/80 bg-slate-50 p-4 text-sm text-slate-600">
-                    指定範囲に activity 記録はありません。
-                  </p>
-                ) : (
-                  <div className="h-[360px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={displayChartData}
-                        margin={{ top: 16, right: 12, left: 0, bottom: 12 }}
-                        barCategoryGap={selectedPreset === "6h" ? "20%" : "8%"}
-                      >
-                        <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" />
-                        <XAxis
-                          dataKey="xLabel"
-                          tickLine={false}
-                          axisLine={false}
-                          minTickGap={selectedPreset === "6h" ? 20 : 32}
-                          tick={{ fill: "#475569", fontSize: 12 }}
-                        />
-                        <YAxis
-                          domain={[0, chartScaleMax]}
-                          ticks={yAxisTicks}
-                          interval={0}
-                          tickFormatter={(value: number) =>
-                            value >= chartScaleMax
-                              ? `${chartScaleMax}以上`
-                              : String(value)
-                          }
-                          allowDecimals={false}
-                          tickLine={false}
-                          axisLine={false}
-                          width={56}
-                          label={{
-                            value: "検知回数",
-                            angle: -90,
-                            position: "insideLeft",
-                            style: {
-                              textAnchor: "middle",
-                              fill: "#475569",
-                              fontSize: 12,
-                            },
-                          }}
-                          tick={{ fill: "#475569", fontSize: 12 }}
-                        />
-                        <Tooltip
-                          cursor={{ fill: "rgba(148, 163, 184, 0.14)" }}
-                          content={<ActivityChartTooltip />}
-                        />
-                        <Bar
-                          dataKey="chartMotionCount"
-                          name="検知回数"
-                          fill="#0f766e"
-                          radius={[6, 6, 0, 0]}
-                        />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </>
+          <Card className="rounded-2xl border-slate-200/80 bg-white/95">
+            <CardHeader className="gap-2 p-4">
+              <CardTitle className="text-base font-semibold text-slate-900">
+                時間帯ごとのセンサー検知
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-4 pt-0">
+              {chartData.length === 0 ? (
+                <p className="rounded-xl border border-slate-200/80 bg-slate-50 p-4 text-sm text-slate-600">
+                  指定範囲に activity 記録はありません。
+                </p>
+              ) : (
+                <div className="h-[360px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={displayChartData}
+                      margin={{ top: 16, right: 12, left: 0, bottom: 12 }}
+                      barCategoryGap={selectedPreset === "6h" ? "20%" : "8%"}
+                    >
+                      <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="xLabel"
+                        tickLine={false}
+                        axisLine={false}
+                        minTickGap={selectedPreset === "6h" ? 20 : 32}
+                        tick={{ fill: "#475569", fontSize: 12 }}
+                      />
+                      <YAxis
+                        domain={[0, chartScaleMax]}
+                        ticks={yAxisTicks}
+                        interval={0}
+                        tickFormatter={(value: number) =>
+                          value >= chartScaleMax
+                            ? `${chartScaleMax}以上`
+                            : String(value)
+                        }
+                        allowDecimals={false}
+                        tickLine={false}
+                        axisLine={false}
+                        width={56}
+                        label={{
+                          value: "検知回数",
+                          angle: -90,
+                          position: "insideLeft",
+                          style: {
+                            textAnchor: "middle",
+                            fill: "#475569",
+                            fontSize: 12,
+                          },
+                        }}
+                        tick={{ fill: "#475569", fontSize: 12 }}
+                      />
+                      <Tooltip
+                        cursor={{ fill: "rgba(148, 163, 184, 0.14)" }}
+                        content={<ActivityChartTooltip />}
+                      />
+                      <Bar
+                        dataKey="chartMotionCount"
+                        name="検知回数"
+                        fill="#0f766e"
+                        radius={[6, 6, 0, 0]}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         )}
       </main>
     </div>

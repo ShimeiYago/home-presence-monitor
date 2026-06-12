@@ -1,7 +1,6 @@
 import type { ScheduledHandler } from "aws-lambda";
 import { PublishCommand, SNSClient } from "@aws-sdk/client-sns";
-import { z } from "zod";
-import { DEVICE_IDS } from "@home-presence-monitor/config/device";
+import { DEVICES } from "@home-presence-monitor/config/device";
 import { MONITOR_THRESHOLDS } from "@home-presence-monitor/config/monitor";
 import { queryActivitiesByDeviceAndRange } from "@home-presence-monitor/db/schema/activities";
 import { queryLatestHeartbeatByDevice } from "@home-presence-monitor/db/schema/heartbeats";
@@ -11,6 +10,10 @@ import {
   type MonitorStateRecord,
   updateMonitorEvaluation,
 } from "@home-presence-monitor/db/schema/monitor-states";
+import { z } from "zod";
+
+const HOUSE_MOTION_MONITOR_STATE_ID = "__house_motion__";
+const HOUSE_MOTION_LABEL = "家全体";
 
 const envSchema = z.object({
   ALERT_TOPIC_ARN: z.string().min(1),
@@ -21,22 +24,30 @@ const envSchema = z.object({
 
 type Env = z.infer<typeof envSchema>;
 
-type DeviceHealth = {
+type TransitionType = "異常発生" | "正常復旧";
+
+type DeviceHeartbeatEvaluation = {
   deviceId: string;
+  label: string;
   isHealthy: boolean;
   reason: string;
   heartbeatAgeMinutes?: number;
+  transitionVersion: number;
+};
+
+type HouseMotionEvaluation = {
+  label: string;
+  isHealthy: boolean;
+  reason: string;
   activityTotal: number;
   consecutiveNonDetectionCount: number;
   transitionVersion: number;
 };
 
-type TransitionType = "異常発生" | "正常復旧";
-
 type TransitionNotification = {
-  deviceId: string;
+  label: string;
   transition: TransitionType;
-  current: DeviceHealth;
+  reason: string;
 };
 
 type CustomNotificationPayload = {
@@ -80,103 +91,123 @@ const isNotificationWindow = (now: Date): boolean => {
   );
 };
 
-const evaluateDevice = async (
-  deviceId: string,
+const transitionFromPrevious = (
+  previousHealthy: boolean | undefined,
+  currentHealthy: boolean,
+): TransitionType | undefined => {
+  if (previousHealthy === undefined || previousHealthy === currentHealthy) {
+    return undefined;
+  }
+
+  return currentHealthy ? "正常復旧" : "異常発生";
+};
+
+const resolvePreviousHeartbeatHealth = (
   previous: MonitorStateRecord | undefined,
-  now: Date,
-): Promise<DeviceHealth> => {
+): boolean | undefined => {
+  if (!previous) {
+    return undefined;
+  }
+
+  const hasHeartbeatReason = previous.reason?.includes("ラズパイ状態") ?? false;
+  const hasSensorReason = previous.reason?.includes("センサー記録") ?? false;
+
+  if (previous.isHealthy === false && hasSensorReason && !hasHeartbeatReason) {
+    return undefined;
+  }
+
+  return previous.isHealthy;
+};
+
+const evaluateDeviceHeartbeat = (params: {
+  deviceId: string;
+  label: string;
+  previous: MonitorStateRecord | undefined;
+  latestHeartbeatAt?: string;
+  now: Date;
+}): DeviceHeartbeatEvaluation => {
+  const { deviceId, label, previous, latestHeartbeatAt, now } = params;
   const nowMs = now.getTime();
-  const nowIso = now.toISOString();
-  const windowMs = MONITOR_THRESHOLDS.sensorActivityWindowMinutes * 60 * 1000;
-  const windowEndMs = floorToIntervalMs(nowMs, windowMs);
-  const windowStartMs = windowEndMs - windowMs;
-  const fromIso = new Date(windowStartMs).toISOString();
-  const toIso = new Date(windowEndMs).toISOString();
-
-  const [latestHeartbeat, activities] = await Promise.all([
-    queryLatestHeartbeatByDevice({ deviceId }),
-    queryActivitiesByDeviceAndRange({
-      deviceId,
-      from: fromIso,
-      to: toIso,
-    }),
-  ]);
-
-  const reasons: string[] = [];
-  let heartbeatAgeMinutes: number | undefined;
   const heartbeatRuleText = `${MONITOR_THRESHOLDS.heartbeatStaleMinutes}分以上未受信で異常`;
+  let heartbeatAgeMinutes: number | undefined;
 
-  const heartbeatHealthy = (() => {
-    if (!latestHeartbeat) {
-      reasons.push(`ラズパイ状態は未記録です（${heartbeatRuleText}）`);
+  const isHealthy = (() => {
+    if (!latestHeartbeatAt) {
       return false;
     }
 
-    heartbeatAgeMinutes = minutesSince(latestHeartbeat.timestamp, nowMs);
-    if (heartbeatAgeMinutes > MONITOR_THRESHOLDS.heartbeatStaleMinutes) {
-      reasons.push(
-        `ラズパイ状態: 最終受信から${heartbeatAgeMinutes}分（${heartbeatRuleText}）`,
-      );
-      return false;
-    }
-
-    return true;
+    heartbeatAgeMinutes = minutesSince(latestHeartbeatAt, nowMs);
+    return heartbeatAgeMinutes <= MONITOR_THRESHOLDS.heartbeatStaleMinutes;
   })();
 
-  const activityTotal = activities.reduce(
-    (sum, activity) => sum + activity.motionCount,
-    0,
-  );
+  const reason = (() => {
+    if (!latestHeartbeatAt) {
+      return `ラズパイ状態: 未記録です（${heartbeatRuleText}）`;
+    }
+
+    if (heartbeatAgeMinutes === undefined) {
+      return `ラズパイ状態: 受信時刻を解釈できません（${heartbeatRuleText}）`;
+    }
+
+    if (!isHealthy) {
+      return `ラズパイ状態: 最終受信から${heartbeatAgeMinutes}分（${heartbeatRuleText}）`;
+    }
+
+    return "正常";
+  })();
+
+  const previousHeartbeatHealthy = resolvePreviousHeartbeatHealth(previous);
+  const previousTransitionVersion = previous?.transitionVersion ?? 0;
+  const transitionVersion =
+    previousHeartbeatHealthy !== undefined &&
+    previousHeartbeatHealthy !== isHealthy
+      ? previousTransitionVersion + 1
+      : previousTransitionVersion;
+
+  return {
+    deviceId,
+    label,
+    isHealthy,
+    reason,
+    ...(heartbeatAgeMinutes === undefined ? {} : { heartbeatAgeMinutes }),
+    transitionVersion,
+  };
+};
+
+const evaluateHouseMotion = (params: {
+  previous: MonitorStateRecord | undefined;
+  activityTotal: number;
+}): HouseMotionEvaluation => {
+  const { previous, activityTotal } = params;
   const sensorDetected =
     activityTotal >= MONITOR_THRESHOLDS.sensorMotionCountHealthyThreshold;
   const previousConsecutiveNonDetectionCount =
     previous?.consecutiveNonDetectionCount ??
-    (previous?.isHealthy === false && previous.reason?.includes("センサー記録")
+    (previous?.isHealthy === false
       ? MONITOR_THRESHOLDS.sensorConsecutiveNonDetectionAlertThreshold
       : 0);
   const consecutiveNonDetectionCount = sensorDetected
     ? 0
     : previousConsecutiveNonDetectionCount + 1;
-  const sensorHealthy =
+  const isHealthy =
     consecutiveNonDetectionCount <
     MONITOR_THRESHOLDS.sensorConsecutiveNonDetectionAlertThreshold;
-  const currentHealthy = heartbeatHealthy && sensorHealthy;
   const previousTransitionVersion = previous?.transitionVersion ?? 0;
   const transitionVersion =
-    previous?.isHealthy !== undefined && previous.isHealthy !== currentHealthy
+    previous?.isHealthy !== undefined && previous.isHealthy !== isHealthy
       ? previousTransitionVersion + 1
       : previousTransitionVersion;
 
-  if (!sensorHealthy) {
-    reasons.push(
-      `センサー記録: 直近${MONITOR_THRESHOLDS.sensorActivityWindowMinutes}分のセンサー検知回数 ${activityTotal}回（生存条件 ${MONITOR_THRESHOLDS.sensorMotionCountHealthyThreshold}回以上 / 連続非検出 ${consecutiveNonDetectionCount}/${MONITOR_THRESHOLDS.sensorConsecutiveNonDetectionAlertThreshold}回）`,
-    );
-  }
-
   return {
-    deviceId,
-    isHealthy: currentHealthy,
-    reason: reasons.length === 0 ? "正常" : reasons.join(" / "),
-    heartbeatAgeMinutes,
+    label: HOUSE_MOTION_LABEL,
+    isHealthy,
+    reason: isHealthy
+      ? "正常"
+      : `家全体のセンサー記録: 直近${MONITOR_THRESHOLDS.sensorActivityWindowMinutes}分の合計 ${activityTotal}回（生存条件 ${MONITOR_THRESHOLDS.sensorMotionCountHealthyThreshold}回以上 / 連続非検出 ${consecutiveNonDetectionCount}/${MONITOR_THRESHOLDS.sensorConsecutiveNonDetectionAlertThreshold}回）`,
     activityTotal,
     consecutiveNonDetectionCount,
     transitionVersion,
   };
-};
-
-const transitionFromPrevious = (
-  previousHealthy: boolean | undefined,
-  currentHealthy: boolean,
-): TransitionType | undefined => {
-  if (previousHealthy === undefined) {
-    return undefined;
-  }
-
-  if (previousHealthy === currentHealthy) {
-    return undefined;
-  }
-
-  return currentHealthy ? "正常復旧" : "異常発生";
 };
 
 const buildNotificationBatches = (
@@ -223,9 +254,9 @@ const buildLineNotificationMessage = (
   lines.push("");
 
   for (const item of notifications) {
-    lines.push(`- ${item.deviceId}: ${item.transition}`);
+    lines.push(`- ${item.label}: ${item.transition}`);
     if (item.transition === "異常発生") {
-      lines.push(`  判定: 異常あり / ${item.current.reason}`);
+      lines.push(`  判定: 異常あり / ${item.reason}`);
     } else {
       lines.push("  判定: 正常");
     }
@@ -245,9 +276,9 @@ const buildSlackNotificationMessage = (
   lines.push("");
 
   for (const item of notifications) {
-    lines.push(`- ${item.deviceId}: ${item.transition}`);
+    lines.push(`- ${item.label}: ${item.transition}`);
     if (item.transition === "異常発生") {
-      lines.push(`  判定: 異常あり / ${item.current.reason}`);
+      lines.push(`  判定: 異常あり / ${item.reason}`);
     } else {
       lines.push("  判定: 正常");
     }
@@ -353,43 +384,119 @@ export const handler: ScheduledHandler = async () => {
   const env = getEnv();
   const now = new Date();
   const nowIso = now.toISOString();
+  const windowMs = MONITOR_THRESHOLDS.sensorActivityWindowMinutes * 60 * 1000;
+  const windowEndMs = floorToIntervalMs(now.getTime(), windowMs);
+  const windowStartMs = windowEndMs - windowMs;
+  const fromIso = new Date(windowStartMs).toISOString();
+  const toIso = new Date(windowEndMs).toISOString();
+
+  const snapshots = await Promise.all(
+    DEVICES.map(async (device) => {
+      const [previous, latestHeartbeat, activities] = await Promise.all([
+        getMonitorStateByDevice({ deviceId: device.id }),
+        queryLatestHeartbeatByDevice({ deviceId: device.id }),
+        queryActivitiesByDeviceAndRange({
+          deviceId: device.id,
+          from: fromIso,
+          to: toIso,
+        }),
+      ]);
+
+      return {
+        device,
+        previous,
+        latestHeartbeatAt: latestHeartbeat?.timestamp,
+        activityTotal: activities.reduce(
+          (sum, activity) => sum + activity.motionCount,
+          0,
+        ),
+      };
+    }),
+  );
+
+  const previousHouseMotion = await getMonitorStateByDevice({
+    deviceId: HOUSE_MOTION_MONITOR_STATE_ID,
+  });
+
   const notifications: TransitionNotification[] = [];
   const evaluations: MonitorEvaluationUpdate[] = [];
 
-  for (const deviceId of DEVICE_IDS) {
-    const previous = await getMonitorStateByDevice({ deviceId });
-    const current = await evaluateDevice(deviceId, previous, now);
+  for (const snapshot of snapshots) {
+    const heartbeatEvaluation = evaluateDeviceHeartbeat({
+      deviceId: snapshot.device.id,
+      label: snapshot.device.label,
+      previous: snapshot.previous,
+      latestHeartbeatAt: snapshot.latestHeartbeatAt,
+      now,
+    });
 
-    const previousHealthy = previous?.isHealthy;
-    const transition = transitionFromPrevious(
-      previousHealthy,
-      current.isHealthy,
+    const heartbeatTransition = transitionFromPrevious(
+      resolvePreviousHeartbeatHealth(snapshot.previous),
+      heartbeatEvaluation.isHealthy,
     );
 
-    if (transition) {
+    if (heartbeatTransition) {
       notifications.push({
-        deviceId,
-        transition,
-        current,
+        label: heartbeatEvaluation.label,
+        transition: heartbeatTransition,
+        reason: heartbeatEvaluation.reason,
       });
     }
 
     evaluations.push({
-      deviceId,
-      isHealthy: current.isHealthy,
+      deviceId: heartbeatEvaluation.deviceId,
+      isHealthy: heartbeatEvaluation.isHealthy,
       updatedAt: nowIso,
-      reason: current.reason,
-      heartbeatAgeMinutes: current.heartbeatAgeMinutes,
-      activityTotal: current.activityTotal,
-      consecutiveNonDetectionCount: current.consecutiveNonDetectionCount,
-      transitionVersion: current.transitionVersion,
-      ...(transition === undefined
+      reason: heartbeatEvaluation.reason,
+      heartbeatAgeMinutes: heartbeatEvaluation.heartbeatAgeMinutes,
+      activityTotal: snapshot.activityTotal,
+      consecutiveNonDetectionCount: 0,
+      transitionVersion: heartbeatEvaluation.transitionVersion,
+      ...(heartbeatTransition === undefined
         ? {}
         : {
-            lastNotifiedTransitionVersion: current.transitionVersion,
+            lastNotifiedTransitionVersion:
+              heartbeatEvaluation.transitionVersion,
           }),
     });
   }
+
+  const houseMotionEvaluation = evaluateHouseMotion({
+    previous: previousHouseMotion,
+    activityTotal: snapshots.reduce(
+      (sum, snapshot) => sum + snapshot.activityTotal,
+      0,
+    ),
+  });
+  const houseMotionTransition = transitionFromPrevious(
+    previousHouseMotion?.isHealthy,
+    houseMotionEvaluation.isHealthy,
+  );
+
+  if (houseMotionTransition) {
+    notifications.push({
+      label: houseMotionEvaluation.label,
+      transition: houseMotionTransition,
+      reason: houseMotionEvaluation.reason,
+    });
+  }
+
+  evaluations.push({
+    deviceId: HOUSE_MOTION_MONITOR_STATE_ID,
+    isHealthy: houseMotionEvaluation.isHealthy,
+    updatedAt: nowIso,
+    reason: houseMotionEvaluation.reason,
+    activityTotal: houseMotionEvaluation.activityTotal,
+    consecutiveNonDetectionCount:
+      houseMotionEvaluation.consecutiveNonDetectionCount,
+    transitionVersion: houseMotionEvaluation.transitionVersion,
+    ...(houseMotionTransition === undefined
+      ? {}
+      : {
+          lastNotifiedTransitionVersion:
+            houseMotionEvaluation.transitionVersion,
+        }),
+  });
 
   try {
     await persistEvaluations(evaluations);

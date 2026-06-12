@@ -14,8 +14,8 @@ import {
 import { updateLatestObservedSourceIp } from "@home-presence-monitor/db/schema/monitor-states";
 import { badRequest, notFound } from "src/app/lib/errors";
 import { getSourceIp } from "src/app/lib/source-ip";
-import { parseJsonBody, parseParams, parseQuery } from "src/app/lib/zod";
-import { deviceParamsSchema } from "./common";
+import { parseJsonBody, parseQuery } from "src/app/lib/zod";
+import { parseConfiguredDevice } from "./common";
 
 export const deviceHeartbeatsRoute = new Hono();
 const HEARTBEAT_TTL_SECONDS = 60 * 60 * 24;
@@ -31,7 +31,7 @@ const toTtlEpoch = (createdAt: string, ttlSeconds: number): number =>
   Math.floor(Date.parse(createdAt) / 1000) + ttlSeconds;
 
 deviceHeartbeatsRoute.get("/", async (c) => {
-  const { deviceId } = parseParams(c, deviceParamsSchema);
+  const { id: deviceId } = parseConfiguredDevice(c);
   const { from, to } = parseQuery(c, getHeartbeatsQuerySchema);
 
   if (from > to) {
@@ -52,7 +52,7 @@ deviceHeartbeatsRoute.get("/", async (c) => {
 });
 
 deviceHeartbeatsRoute.get("/latest", async (c) => {
-  const { deviceId } = parseParams(c, deviceParamsSchema);
+  const { id: deviceId } = parseConfiguredDevice(c);
   const latestHeartbeat = await queryLatestHeartbeatByDevice({ deviceId });
 
   if (!latestHeartbeat) {
@@ -69,7 +69,7 @@ deviceHeartbeatsRoute.get("/latest", async (c) => {
 });
 
 deviceHeartbeatsRoute.post("/", async (c) => {
-  const { deviceId } = parseParams(c, deviceParamsSchema);
+  const { id: deviceId } = parseConfiguredDevice(c);
   const body = await parseJsonBody<PostHeartbeatRequest>(
     c,
     postHeartbeatRequestSchema,

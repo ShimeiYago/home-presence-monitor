@@ -5,6 +5,8 @@ This directory contains the Raspberry Pi process that sends:
 - heartbeat every 5 minutes (default)
 - activity count for each 10-minute window (default)
 
+Each Raspberry Pi is identified by its own `DEVICE_ID` in `.env`.
+
 ## Files
 
 - `monitor.py`: main process

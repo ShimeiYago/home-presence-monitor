@@ -10,8 +10,8 @@ import {
   queryActivitiesByDeviceAndRange,
 } from "@home-presence-monitor/db/schema/activities";
 import { badRequest } from "src/app/lib/errors";
-import { parseJsonBody, parseParams, parseQuery } from "src/app/lib/zod";
-import { deviceParamsSchema } from "./common";
+import { parseJsonBody, parseQuery } from "src/app/lib/zod";
+import { parseConfiguredDevice } from "./common";
 
 export const deviceActivitiesRoute = new Hono();
 const ACTIVITY_TTL_SECONDS = 60 * 60 * 24 * 30;
@@ -29,7 +29,7 @@ const toTtlEpoch = (createdAt: string, ttlSeconds: number): number =>
   Math.floor(Date.parse(createdAt) / 1000) + ttlSeconds;
 
 deviceActivitiesRoute.get("/", async (c) => {
-  const { deviceId } = parseParams(c, deviceParamsSchema);
+  const { id: deviceId } = parseConfiguredDevice(c);
   const { from, to } = parseQuery(c, getActivitiesQuerySchema);
 
   if (from > to) {
@@ -52,7 +52,7 @@ deviceActivitiesRoute.get("/", async (c) => {
 });
 
 deviceActivitiesRoute.post("/", async (c) => {
-  const { deviceId } = parseParams(c, deviceParamsSchema);
+  const { id: deviceId } = parseConfiguredDevice(c);
   const body = await parseJsonBody<PostActivityRequest>(
     c,
     postActivityRequestSchema,

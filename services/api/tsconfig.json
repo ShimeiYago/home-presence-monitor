@@ -15,6 +15,7 @@
     "types": ["node", "aws-lambda"],
     "baseUrl": "./",
     "paths": {
+      "@home-presence-monitor/config/*": ["../../packages/config/*"],
       "@home-presence-monitor/contracts/api": [
         "../../packages/contracts/api/index.ts"
       ],

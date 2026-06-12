@@ -16,6 +16,10 @@ export default defineConfig({
         ),
       },
       {
+        find: /^@home-presence-monitor\/config\/(.*)$/,
+        replacement: resolve(__dirname, "../../packages/config") + "/$1",
+      },
+      {
         find: /^@home-presence-monitor\/db\/(.*)$/,
         replacement: resolve(__dirname, "../../packages/db/src") + "/$1",
       },

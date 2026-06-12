@@ -78,7 +78,7 @@ Raspberry Pi Imager で microSDに書き込む。
 - OS: Raspberry Pi OS Lite (32-bit)
 - Storage: microSDカードを選択
 - Customisation
-  - hostname: device01
+  - hostname: device01 または device02
   - username: admin
   - password: (任意のパスワード)
   - WiFi (2.4GHzのWiFiを推奨)
@@ -93,6 +93,8 @@ Raspberry Pi 側が定期的に `git pull` して自分で更新する構成。
 ```sh
 ssh admin@device01.local
 ```
+
+2台目も同様に、たとえば `ssh admin@device02.local` で接続します。
 
 Raspberry Pi Imager で設定したパスワードを入力してログイン。
 
@@ -155,8 +157,16 @@ cp .env.example .env
 
 6. `services/pi/.env` を環境に合わせて編集する
 
-- `API_URL`
+- `DEVICE_ID`
+- `API_BASE_URL`
 - `API_KEY`
+
+各 Raspberry Pi で `DEVICE_ID` は必ず一意に設定してください。現状の前提値は以下です。
+
+- 1台目: `DEVICE_ID=device01`
+- 2台目: `DEVICE_ID=device02`
+
+フロント表示名は `packages/config/device.ts` で管理します。
 
 7. systemd unit を配置する
 
