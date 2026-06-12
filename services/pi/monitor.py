@@ -11,12 +11,10 @@ from __future__ import annotations
 import dataclasses
 import logging
 import os
-import re
 import signal
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
@@ -31,8 +29,16 @@ else:
     GPIO_IMPORT_ERROR = None
 
 LOGGER = logging.getLogger("pi-monitor")
-REPO_ROOT = Path(__file__).resolve().parents[2]
-MONITOR_CONFIG_TS_PATH = REPO_ROOT / "packages" / "config" / "monitor.ts"
+
+API_KEY_HEADER = "x-api-key"
+GPIO_PIN = 17
+HEARTBEAT_INTERVAL_SEC = 300 # 5 minutes
+MOTION_WINDOW_SEC = 600 # 10 minutes
+REQUEST_TIMEOUT_SEC = 10
+POST_MAX_ATTEMPTS = 3
+POST_RETRY_BACKOFF_SEC = 1.0
+COOLDOWN_SEC = 2.0
+LOG_LEVEL = "INFO"
 
 
 def utc_now() -> datetime:
@@ -55,49 +61,6 @@ def env_str(name: str, default: Optional[str] = None) -> str:
         raise ValueError(f"Missing environment variable: {name}")
     return value
 
-
-def env_int(name: str, default: int) -> int:
-    value = os.getenv(name, str(default))
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise ValueError(f"Environment variable {name} must be int, got: {value}") from exc
-
-
-def env_float(name: str, default: float) -> float:
-    value = os.getenv(name, str(default))
-    try:
-        return float(value)
-    except ValueError as exc:
-        raise ValueError(f"Environment variable {name} must be float, got: {value}") from exc
-
-
-def read_ts_numeric_config(
-    file_path: Path,
-    export_name: str,
-    field_name: str,
-) -> float:
-    source = file_path.read_text(encoding="utf-8")
-    pattern = (
-        rf"export const {re.escape(export_name)} = \{{"
-        rf"(?P<body>.*?)"
-        rf"\}} as const;"
-    )
-    match = re.search(pattern, source, re.DOTALL)
-    if match is None:
-        raise ValueError(f"Config export not found: {export_name} in {file_path}")
-
-    body = match.group("body")
-    field_pattern = rf"{re.escape(field_name)}:\s*(?P<value>-?\d+(?:\.\d+)?)"
-    field_match = re.search(field_pattern, body)
-    if field_match is None:
-        raise ValueError(
-            f"Config field not found: {export_name}.{field_name} in {file_path}"
-        )
-
-    return float(field_match.group("value"))
-
-
 @dataclasses.dataclass(frozen=True)
 class Config:
     device_id: str
@@ -117,28 +80,18 @@ class Config:
     def from_env(cls) -> "Config":
         api_key = os.getenv("API_KEY", "").strip() or None
         config = cls(
-            device_id=env_str("DEVICE_ID", "device01"),
+            device_id=env_str("DEVICE_ID"),
             api_base_url=env_str("API_BASE_URL"),
             api_key=api_key,
-            api_key_header=env_str("API_KEY_HEADER", "x-api-key"),
-            gpio_pin=env_int("GPIO_PIN", 17),
-            heartbeat_interval_sec=env_int("HEARTBEAT_INTERVAL_SEC", 300),
-            motion_window_sec=env_int("MOTION_WINDOW_SEC", 600),
-            request_timeout_sec=env_int("REQUEST_TIMEOUT_SEC", 10),
-            post_max_attempts=int(
-                read_ts_numeric_config(
-                    MONITOR_CONFIG_TS_PATH,
-                    "PI_POST_RETRY_CONFIG",
-                    "maxAttempts",
-                )
-            ),
-            post_retry_backoff_sec=read_ts_numeric_config(
-                MONITOR_CONFIG_TS_PATH,
-                "PI_POST_RETRY_CONFIG",
-                "backoffSec",
-            ),
-            cooldown_sec=env_float("COOLDOWN_SEC", 2.0),
-            log_level=env_str("LOG_LEVEL", "INFO").upper(),
+            api_key_header=API_KEY_HEADER,
+            gpio_pin=GPIO_PIN,
+            heartbeat_interval_sec=HEARTBEAT_INTERVAL_SEC,
+            motion_window_sec=MOTION_WINDOW_SEC,
+            request_timeout_sec=REQUEST_TIMEOUT_SEC,
+            post_max_attempts=POST_MAX_ATTEMPTS,
+            post_retry_backoff_sec=POST_RETRY_BACKOFF_SEC,
+            cooldown_sec=COOLDOWN_SEC,
+            log_level=LOG_LEVEL,
         )
 
         if config.heartbeat_interval_sec <= 0:
