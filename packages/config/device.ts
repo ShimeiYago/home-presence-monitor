@@ -1,7 +1,7 @@
 export const DEVICES = [
   {
     id: "device01",
-    label: "デバイス1",
+    label: "テレビ下",
   },
   {
     id: "device02",
