@@ -237,3 +237,26 @@ systemctl status home-presence-monitor-pi-update.timer
 # 手動再起動
 sudo systemctl restart home-presence-monitor-pi
 ```
+
+### Wi-Fi の追加
+
+現地のWi-Fiが見える場所に行ったら自動で接続するように、nmcli で接続プロファイルを追加します。
+
+1. 事前にWi-Fiプロファイルを作る
+
+```sh
+sudo nmcli connection add \
+  type wifi \
+  ifname wlan0 \
+  con-name "L03E_7BE5CB66_A" \
+  ssid "L03E_7BE5CB66_A" \
+  wifi-sec.key-mgmt wpa-psk \
+  wifi-sec.psk "WiFiパスワード"
+```
+
+2. 動接続ON・優先度高めにする
+
+```sh
+sudo nmcli connection modify "L03E_7BE5CB66_A" connection.autoconnect yes
+sudo nmcli connection modify "L03E_7BE5CB66_A" connection.autoconnect-priority 100
+```
