@@ -51,6 +51,11 @@ const LOOKBACK_WINDOW_COUNT =
 const floorToIntervalMs = (valueMs: number, intervalMs: number): number =>
   Math.floor(valueMs / intervalMs) * intervalMs;
 
+const toTimestampMs = (value: string): number | null => {
+  const timestampMs = Date.parse(value);
+  return Number.isNaN(timestampMs) ? null : timestampMs;
+};
+
 const buildHouseMotionRange = () => {
   const windowEndMs = floorToIntervalMs(Date.now(), WINDOW_MS);
   const windowStartMs = windowEndMs - WINDOW_MS * LOOKBACK_WINDOW_COUNT;
@@ -69,24 +74,25 @@ const summarizeHouseMotion = (
   windowStarts: string[],
 ): HouseMotionSummary => {
   const totalsByWindow = new Map(
-    windowStarts.map((windowStart) => [windowStart, 0]),
+    windowStarts.map((windowStart) => [Date.parse(windowStart), 0]),
   );
 
   for (const records of recordsByDevice) {
     for (const record of records) {
-      if (!totalsByWindow.has(record.windowStart)) {
+      const windowStartMs = toTimestampMs(record.windowStart);
+      if (windowStartMs === null || !totalsByWindow.has(windowStartMs)) {
         continue;
       }
 
       totalsByWindow.set(
-        record.windowStart,
-        (totalsByWindow.get(record.windowStart) ?? 0) + record.motionCount,
+        windowStartMs,
+        (totalsByWindow.get(windowStartMs) ?? 0) + record.motionCount,
       );
     }
   }
 
   const orderedTotals = windowStarts.map(
-    (windowStart) => totalsByWindow.get(windowStart) ?? 0,
+    (windowStart) => totalsByWindow.get(Date.parse(windowStart)) ?? 0,
   );
   let consecutiveNonDetectionCount = 0;
 
