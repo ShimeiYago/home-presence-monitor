@@ -171,29 +171,16 @@ export class CdkStack extends Stack {
       );
     }
 
-    const basicAuthUsername = process.env.CLOUDFRONT_BASIC_AUTH_USERNAME;
-    const basicAuthPassword = process.env.CLOUDFRONT_BASIC_AUTH_PASSWORD;
     const slackChannelId = "C0AN31Z2ML7";
     const slackWorkspaceId = "T0ANXC5475F";
     const lineChannelAccessToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
     const lineGroupId = process.env.LINE_GROUP_ID;
-
-    if (!basicAuthUsername || !basicAuthPassword) {
-      throw new Error(
-        "CLOUDFRONT_BASIC_AUTH_USERNAME and CLOUDFRONT_BASIC_AUTH_PASSWORD must be set (recommended: cdk/.env) before CDK synth/deploy.",
-      );
-    }
 
     if (!lineChannelAccessToken || !lineGroupId) {
       throw new Error(
         "LINE_CHANNEL_ACCESS_TOKEN and LINE_GROUP_ID must be set (recommended: cdk/.env) before CDK synth/deploy.",
       );
     }
-
-    const expectedAuthorizationHeader = `Basic ${Buffer.from(
-      `${basicAuthUsername}:${basicAuthPassword}`,
-      "utf8",
-    ).toString("base64")}`;
 
     const hostedZone = hasCustomDomain
       ? route53.HostedZone.fromLookup(this, "HostedZone", {
@@ -236,26 +223,6 @@ export class CdkStack extends Stack {
     const cleanUrlFunction = new cloudfront.Function(this, "CleanUrlFunction", {
       code: cloudfront.FunctionCode.fromInline(`function handler(event) {
   var request = event.request;
-  var headers = request.headers || {};
-  var authorizationHeader =
-    headers.authorization && headers.authorization.value;
-  var expectedAuthorizationHeader = ${JSON.stringify(expectedAuthorizationHeader)};
-
-  if (authorizationHeader !== expectedAuthorizationHeader) {
-    return {
-      statusCode: 401,
-      statusDescription: 'Unauthorized',
-      headers: {
-        'www-authenticate': {
-          value: 'Basic realm="HomePresenceMonitor"'
-        },
-        'cache-control': {
-          value: 'no-store'
-        }
-      }
-    };
-  }
-
   var uri = request.uri || '/';
 
   if (!uri.includes('.')) {
