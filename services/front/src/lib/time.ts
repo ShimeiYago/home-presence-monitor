@@ -62,6 +62,17 @@ export const formatJstMonthDayHour = (value: string): string => {
   return `${map.month}/${map.day} ${map.hour}:00`;
 };
 
+export const formatJstMonthDayHourMinute = (value: string): string => {
+  const date = new Date(value);
+  const time = date.getTime();
+  if (Number.isNaN(time)) {
+    return "不正な時刻";
+  }
+
+  const map = toPartMap(jstMinuteFormatter, date);
+  return `${map.month}/${map.day} ${map.hour}:${map.minute}`;
+};
+
 export const floorIsoToJstHour = (value: string): string => {
   const timestampMs = Date.parse(value);
   if (Number.isNaN(timestampMs)) {

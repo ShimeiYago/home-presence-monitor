@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Activity as ActivityIcon, ArrowLeft } from "lucide-react";
 import {
@@ -35,6 +35,7 @@ import {
   formatJstHourMinute,
   formatJstHourRange,
   formatJstMonthDayHour,
+  formatJstMonthDayHourMinute,
 } from "@/lib/time";
 
 type ActivityRangePreset = "6h" | "12h" | "24h" | "3d";
@@ -85,6 +86,15 @@ const ACTIVITY_PRESET_OPTIONS: ActivityRangePreset[] = [
   "3d",
 ];
 
+const SCROLLABLE_CHART_PRESET: ActivityRangePreset = "3d";
+const SCROLLABLE_CHART_MIN_WIDTH_PX = 320;
+const CHART_HEIGHT_PX = 360;
+const CHART_MARGIN = { top: 16, right: 12, left: 0, bottom: 12 };
+const Y_AXIS_WIDTH_PX = 56;
+const SCROLLABLE_CHART_HORIZONTAL_PADDING_PX = 12;
+const TARGET_VISIBLE_BUCKET_COUNT_FOR_SCROLLABLE_CHART =
+  (ACTIVITY_PRESET_HOURS["6h"] * 60) / 10;
+
 const buildActivityRange = (preset: ActivityRangePreset): TimeRange => {
   const to = new Date();
   const from = new Date(
@@ -105,12 +115,15 @@ const buildChartData = (
     a.windowStart.localeCompare(b.windowStart),
   );
 
-  if (preset === "6h" || preset === "12h") {
+  if (preset === "6h" || preset === "12h" || preset === "3d") {
     return sorted.map((record) => ({
       bucketStart: record.windowStart,
       bucketEnd: record.windowEnd,
       motionCount: record.motionCount,
-      xLabel: formatJstHourMinute(record.windowStart),
+      xLabel:
+        preset === "3d"
+          ? formatJstMonthDayHourMinute(record.windowStart)
+          : formatJstHourMinute(record.windowStart),
       tooltipLabel: `${formatJstDateTimeMinute(record.windowStart)} - ${formatJstHourMinute(record.windowEnd)}`,
     }));
   }
@@ -266,12 +279,14 @@ function ActivitiesPageContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const chartViewportRef = useRef<HTMLDivElement | null>(null);
   const selectedDevice = useMemo(
     () => resolveDeviceFromQueryParam(searchParams.get("deviceId")),
     [searchParams],
   );
   const [selectedPreset, setSelectedPreset] =
     useState<ActivityRangePreset>("6h");
+  const [chartViewportWidth, setChartViewportWidth] = useState<number>(0);
   const [records, setRecords] = useState<Activity[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -347,12 +362,84 @@ function ActivitiesPageContent() {
     () => buildYAxisTicks(chartScaleMax),
     [chartScaleMax],
   );
+  const isScrollableChart = selectedPreset === SCROLLABLE_CHART_PRESET;
+  const chartWidth = useMemo<number>(() => {
+    if (!isScrollableChart) {
+      return chartViewportWidth;
+    }
+
+    const fixedWidth =
+      Y_AXIS_WIDTH_PX +
+      CHART_MARGIN.right +
+      CHART_MARGIN.left +
+      SCROLLABLE_CHART_HORIZONTAL_PADDING_PX * 2;
+    const plotAreaWidth = Math.max(0, chartViewportWidth - fixedWidth);
+    const computedWidth =
+      fixedWidth +
+      plotAreaWidth *
+        (displayChartData.length /
+          TARGET_VISIBLE_BUCKET_COUNT_FOR_SCROLLABLE_CHART);
+
+    return Math.max(
+      chartViewportWidth,
+      SCROLLABLE_CHART_MIN_WIDTH_PX,
+      computedWidth,
+    );
+  }, [chartViewportWidth, displayChartData.length, isScrollableChart]);
 
   const handleDeviceChange = (deviceId: string) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set("deviceId", deviceId);
     router.replace(`${pathname}?${params.toString()}`);
   };
+
+  useEffect(() => {
+    const element = chartViewportRef.current;
+    if (!element) {
+      return;
+    }
+
+    setChartViewportWidth(element.clientWidth);
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) {
+        return;
+      }
+
+      setChartViewportWidth(entry.contentRect.width);
+    });
+
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [chartData.length]);
+
+  useEffect(() => {
+    if (!isScrollableChart) {
+      return;
+    }
+
+    const element = chartViewportRef.current;
+    if (!element) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      element.scrollLeft = element.scrollWidth - element.clientWidth;
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [
+    chartWidth,
+    displayChartData.length,
+    isScrollableChart,
+    selectedDevice.id,
+  ]);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 via-slate-100 to-slate-200 px-4 py-8 text-slate-900 sm:px-6">
@@ -463,19 +550,28 @@ function ActivitiesPageContent() {
                   指定範囲に activity 記録はありません。
                 </p>
               ) : (
-                <div className="h-[360px] w-full">
-                  <ResponsiveContainer width="100%" height="100%">
+                <div
+                  ref={chartViewportRef}
+                  className={
+                    isScrollableChart
+                      ? "h-[360px] w-full overflow-x-auto overflow-y-hidden pb-2"
+                      : "h-[360px] w-full"
+                  }
+                >
+                  {isScrollableChart ? (
                     <BarChart
+                      width={chartWidth}
+                      height={CHART_HEIGHT_PX}
                       data={displayChartData}
-                      margin={{ top: 16, right: 12, left: 0, bottom: 12 }}
-                      barCategoryGap={selectedPreset === "6h" ? "20%" : "8%"}
+                      margin={CHART_MARGIN}
+                      barCategoryGap="8%"
                     >
                       <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" />
                       <XAxis
                         dataKey="xLabel"
                         tickLine={false}
                         axisLine={false}
-                        minTickGap={selectedPreset === "6h" ? 20 : 32}
+                        minTickGap={64}
                         tick={{ fill: "#475569", fontSize: 12 }}
                       />
                       <YAxis
@@ -490,7 +586,7 @@ function ActivitiesPageContent() {
                         allowDecimals={false}
                         tickLine={false}
                         axisLine={false}
-                        width={56}
+                        width={Y_AXIS_WIDTH_PX}
                         label={{
                           value: "検知回数",
                           angle: -90,
@@ -514,7 +610,59 @@ function ActivitiesPageContent() {
                         radius={[6, 6, 0, 0]}
                       />
                     </BarChart>
-                  </ResponsiveContainer>
+                  ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={displayChartData}
+                        margin={CHART_MARGIN}
+                        barCategoryGap={selectedPreset === "6h" ? "20%" : "8%"}
+                      >
+                        <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" />
+                        <XAxis
+                          dataKey="xLabel"
+                          tickLine={false}
+                          axisLine={false}
+                          minTickGap={selectedPreset === "6h" ? 20 : 32}
+                          tick={{ fill: "#475569", fontSize: 12 }}
+                        />
+                        <YAxis
+                          domain={[0, chartScaleMax]}
+                          ticks={yAxisTicks}
+                          interval={0}
+                          tickFormatter={(value: number) =>
+                            value >= chartScaleMax
+                              ? `${chartScaleMax}以上`
+                              : String(value)
+                          }
+                          allowDecimals={false}
+                          tickLine={false}
+                          axisLine={false}
+                          width={Y_AXIS_WIDTH_PX}
+                          label={{
+                            value: "検知回数",
+                            angle: -90,
+                            position: "insideLeft",
+                            style: {
+                              textAnchor: "middle",
+                              fill: "#475569",
+                              fontSize: 12,
+                            },
+                          }}
+                          tick={{ fill: "#475569", fontSize: 12 }}
+                        />
+                        <Tooltip
+                          cursor={{ fill: "rgba(148, 163, 184, 0.14)" }}
+                          content={<ActivityChartTooltip />}
+                        />
+                        <Bar
+                          dataKey="chartMotionCount"
+                          name="検知回数"
+                          fill="#0f766e"
+                          radius={[6, 6, 0, 0]}
+                        />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
                 </div>
               )}
             </CardContent>
