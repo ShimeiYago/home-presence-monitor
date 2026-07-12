@@ -1,0 +1,27 @@
+{
+  "devices": [
+    {
+      "id": "device01",
+      "label": "居間"
+    },
+    {
+      "id": "device02",
+      "label": "デバイス2"
+    }
+  ],
+  "l03eRestartOwnerDeviceId": "device01",
+  "l03e": {
+    "baseUrl": "http://192.168.225.1",
+    "adminPassword": "1234",
+    "profileName": "rokemoba",
+    "apnStatic": "4gn.jp",
+    "profileUsername": "roke@moba",
+    "profilePassword": "rokemoba",
+    "profileAuthentication": "PAP",
+    "wanCheckUrls": ["http://1.1.1.1/", "http://8.8.8.8/"],
+    "checkIntervalSec": 60,
+    "consecutiveFailuresBeforeRestart": 3,
+    "restartCooldownSec": 1800,
+    "requestTimeoutSec": 5
+  }
+}

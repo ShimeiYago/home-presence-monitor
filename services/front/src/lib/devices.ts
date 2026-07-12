@@ -4,7 +4,7 @@ import {
   getDeviceById,
   type DeviceConfig,
   type DeviceId,
-} from "@home-presence-monitor/config/device";
+} from "@home-presence-monitor/config/devices";
 
 const fallbackDevice = DEVICES[0];
 

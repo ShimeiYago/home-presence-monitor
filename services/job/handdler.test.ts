@@ -23,7 +23,7 @@ const {
   fetchMock: vi.fn(),
 }));
 
-vi.mock("@home-presence-monitor/config/device", () => ({
+vi.mock("@home-presence-monitor/config/devices", () => ({
   DEVICES: devices,
 }));
 

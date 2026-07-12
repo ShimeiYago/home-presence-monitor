@@ -2,7 +2,7 @@ import type { Context } from "hono";
 import {
   getDeviceById,
   type DeviceConfig,
-} from "@home-presence-monitor/config/device";
+} from "@home-presence-monitor/config/devices";
 import { notFound } from "src/app/lib/errors";
 import { parseParams } from "src/app/lib/zod";
 import z from "zod";

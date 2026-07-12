@@ -1,6 +1,6 @@
 import type { ScheduledHandler } from "aws-lambda";
 import { PublishCommand, SNSClient } from "@aws-sdk/client-sns";
-import { DEVICES } from "@home-presence-monitor/config/device";
+import { DEVICES } from "@home-presence-monitor/config/devices";
 import { MONITOR_THRESHOLDS } from "@home-presence-monitor/config/monitor";
 import { queryActivitiesByDeviceAndRange } from "@home-presence-monitor/db/schema/activities";
 import { queryLatestHeartbeatByDevice } from "@home-presence-monitor/db/schema/heartbeats";

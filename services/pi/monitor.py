@@ -9,13 +9,15 @@ Sends:
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import os
 import signal
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 from urllib.parse import quote
 
 import requests
@@ -39,6 +41,9 @@ POST_MAX_ATTEMPTS = 3
 POST_RETRY_BACKOFF_SEC = 1.0
 COOLDOWN_SEC = 2.0
 LOG_LEVEL = "INFO"
+SHARED_DEVICES_CONFIG_PATH = (
+    Path(__file__).resolve().parents[2] / "packages" / "config" / "devices.json"
+)
 
 
 def utc_now() -> datetime:
@@ -61,6 +66,125 @@ def env_str(name: str, default: Optional[str] = None) -> str:
         raise ValueError(f"Missing environment variable: {name}")
     return value
 
+
+def require_str(value: Any, name: str) -> str:
+    if not isinstance(value, str) or value.strip() == "":
+        raise ValueError(f"{name} must be a non-empty string")
+    return value
+
+
+def require_positive_int(value: Any, name: str) -> int:
+    if not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+@dataclasses.dataclass(frozen=True)
+class L03ERestartConfig:
+    base_url: str
+    admin_password: str
+    profile_name: str
+    apn_static: str
+    profile_username: str
+    profile_password: str
+    profile_authentication: str
+    wan_check_urls: tuple[str, ...]
+    check_interval_sec: int
+    consecutive_failures_before_restart: int
+    restart_cooldown_sec: int
+    request_timeout_sec: int
+
+    @property
+    def login_apply_url(self) -> str:
+        return f"{self.base_url}/jp/login_apply.htm"
+
+    @property
+    def login_apply2_url(self) -> str:
+        return f"{self.base_url}/jp/login_apply2.htm"
+
+    @property
+    def login_page_url(self) -> str:
+        return f"{self.base_url}/jp/login.htm"
+
+    @property
+    def profile_page_url(self) -> str:
+        return f"{self.base_url}/jp/network/profile.htm"
+
+    @property
+    def profile_apply_url(self) -> str:
+        return f"{self.base_url}/jp/network/profile_apply.htm"
+
+
+@dataclasses.dataclass
+class L03ERestartState:
+    consecutive_wan_failures: int = 0
+    last_restart_monotonic: Optional[float] = None
+
+
+def load_l03e_restart_config(
+    device_id: str,
+    config_path: Path = SHARED_DEVICES_CONFIG_PATH,
+) -> Optional[L03ERestartConfig]:
+    with config_path.open(encoding="utf-8") as config_file:
+        config = json.load(config_file)
+
+    owner_device_id = require_str(
+        config.get("l03eRestartOwnerDeviceId"),
+        "l03eRestartOwnerDeviceId",
+    )
+    if owner_device_id != device_id:
+        return None
+
+    raw_l03e = config.get("l03e")
+    if not isinstance(raw_l03e, dict):
+        raise ValueError("l03e must be an object")
+
+    raw_wan_check_urls = raw_l03e.get("wanCheckUrls")
+    if not isinstance(raw_wan_check_urls, list) or len(raw_wan_check_urls) == 0:
+        raise ValueError("l03e.wanCheckUrls must be a non-empty list")
+
+    wan_check_urls = tuple(
+        require_str(url, f"l03e.wanCheckUrls[{index}]")
+        for index, url in enumerate(raw_wan_check_urls)
+    )
+
+    return L03ERestartConfig(
+        base_url=require_str(raw_l03e.get("baseUrl"), "l03e.baseUrl").rstrip("/"),
+        admin_password=require_str(raw_l03e.get("adminPassword"), "l03e.adminPassword"),
+        profile_name=require_str(raw_l03e.get("profileName"), "l03e.profileName"),
+        apn_static=require_str(raw_l03e.get("apnStatic"), "l03e.apnStatic"),
+        profile_username=require_str(
+            raw_l03e.get("profileUsername"),
+            "l03e.profileUsername",
+        ),
+        profile_password=require_str(
+            raw_l03e.get("profilePassword"),
+            "l03e.profilePassword",
+        ),
+        profile_authentication=require_str(
+            raw_l03e.get("profileAuthentication"),
+            "l03e.profileAuthentication",
+        ),
+        wan_check_urls=wan_check_urls,
+        check_interval_sec=require_positive_int(
+            raw_l03e.get("checkIntervalSec"),
+            "l03e.checkIntervalSec",
+        ),
+        consecutive_failures_before_restart=require_positive_int(
+            raw_l03e.get("consecutiveFailuresBeforeRestart"),
+            "l03e.consecutiveFailuresBeforeRestart",
+        ),
+        restart_cooldown_sec=require_positive_int(
+            raw_l03e.get("restartCooldownSec"),
+            "l03e.restartCooldownSec",
+        ),
+        request_timeout_sec=require_positive_int(
+            raw_l03e.get("requestTimeoutSec"),
+            "l03e.requestTimeoutSec",
+        ),
+    )
+
+
 @dataclasses.dataclass(frozen=True)
 class Config:
     device_id: str
@@ -75,12 +199,14 @@ class Config:
     post_retry_backoff_sec: float
     cooldown_sec: float
     log_level: str
+    l03e_restart_config: Optional[L03ERestartConfig]
 
     @classmethod
     def from_env(cls) -> "Config":
         api_key = os.getenv("API_KEY", "").strip() or None
+        device_id = env_str("DEVICE_ID")
         config = cls(
-            device_id=env_str("DEVICE_ID"),
+            device_id=device_id,
             api_base_url=env_str("API_BASE_URL"),
             api_key=api_key,
             api_key_header=API_KEY_HEADER,
@@ -92,6 +218,7 @@ class Config:
             post_retry_backoff_sec=POST_RETRY_BACKOFF_SEC,
             cooldown_sec=COOLDOWN_SEC,
             log_level=LOG_LEVEL,
+            l03e_restart_config=load_l03e_restart_config(device_id),
         )
 
         if config.heartbeat_interval_sec <= 0:
@@ -231,6 +358,172 @@ def post_json(
         time.sleep(retry_backoff_sec * attempt)
 
 
+def is_url_reachable(
+    session: requests.Session,
+    url: str,
+    timeout_sec: int,
+) -> bool:
+    try:
+        response = session.get(url, timeout=timeout_sec, allow_redirects=False)
+    except requests.RequestException as exc:
+        LOGGER.debug("L-03E reachability failed url=%s error=%s", url, exc)
+        return False
+
+    LOGGER.debug("L-03E reachability ok url=%s status=%s", url, response.status_code)
+    return True
+
+
+def has_wan_connectivity(
+    session: requests.Session,
+    l03e_config: L03ERestartConfig,
+) -> bool:
+    for url in l03e_config.wan_check_urls:
+        if is_url_reachable(session, url, l03e_config.request_timeout_sec):
+            return True
+    return False
+
+
+def restart_l03e(
+    session: requests.Session,
+    l03e_config: L03ERestartConfig,
+) -> bool:
+    login_response = session.post(
+        l03e_config.login_apply_url,
+        data={
+            "D": str(int(time.time())),
+            "input_text_Username": "Admin",
+            "input_password_Password": l03e_config.admin_password,
+            "select_cn": "jp",
+        },
+        headers={"Referer": l03e_config.login_page_url},
+        timeout=l03e_config.request_timeout_sec,
+    )
+    if not 200 <= login_response.status_code < 300:
+        LOGGER.warning(
+            "L-03E login_apply failed status=%s",
+            login_response.status_code,
+        )
+        return False
+
+    login_apply2_response = session.get(
+        l03e_config.login_apply2_url,
+        headers={"Referer": l03e_config.login_apply_url},
+        timeout=l03e_config.request_timeout_sec,
+        allow_redirects=False,
+    )
+    if not 200 <= login_apply2_response.status_code < 300:
+        LOGGER.warning(
+            "L-03E login_apply2 failed status=%s",
+            login_apply2_response.status_code,
+        )
+        return False
+
+    profile_apply_response = session.post(
+        l03e_config.profile_apply_url,
+        data={
+            "T": "1",
+            "A": "1",
+            "select_Current_profile": l03e_config.profile_name,
+            "input_text_Profile_name": l03e_config.profile_name,
+            "input_text_APN_Static": l03e_config.apn_static,
+            "input_text_Username": l03e_config.profile_username,
+            "input_text_Password": l03e_config.profile_password,
+            "select_Authentication": l03e_config.profile_authentication,
+        },
+        headers={
+            "Origin": l03e_config.base_url,
+            "Referer": l03e_config.profile_page_url,
+        },
+        timeout=l03e_config.request_timeout_sec,
+    )
+    if not 200 <= profile_apply_response.status_code < 300:
+        LOGGER.warning(
+            "L-03E profile_apply failed status=%s",
+            profile_apply_response.status_code,
+        )
+        return False
+
+    LOGGER.warning("L-03E restart triggered via profile_apply")
+    return True
+
+
+def check_l03e_once(
+    session: requests.Session,
+    l03e_config: L03ERestartConfig,
+    state: L03ERestartState,
+    now_monotonic: float,
+) -> bool:
+    if not is_url_reachable(
+        session,
+        l03e_config.login_page_url,
+        l03e_config.request_timeout_sec,
+    ):
+        state.consecutive_wan_failures = 0
+        LOGGER.warning("L-03E router unreachable; skipping restart check")
+        return False
+
+    if has_wan_connectivity(session, l03e_config):
+        if state.consecutive_wan_failures > 0:
+            LOGGER.info(
+                "L-03E WAN recovered after failures=%s",
+                state.consecutive_wan_failures,
+            )
+        state.consecutive_wan_failures = 0
+        return False
+
+    state.consecutive_wan_failures += 1
+    LOGGER.warning(
+        "L-03E WAN check failed consecutive_failures=%s threshold=%s",
+        state.consecutive_wan_failures,
+        l03e_config.consecutive_failures_before_restart,
+    )
+
+    if (
+        state.consecutive_wan_failures
+        < l03e_config.consecutive_failures_before_restart
+    ):
+        return False
+
+    if (
+        state.last_restart_monotonic is not None
+        and now_monotonic - state.last_restart_monotonic
+        < l03e_config.restart_cooldown_sec
+    ):
+        LOGGER.warning(
+            "L-03E restart skipped during cooldown elapsed=%.1fs cooldown=%ss",
+            now_monotonic - state.last_restart_monotonic,
+            l03e_config.restart_cooldown_sec,
+        )
+        return False
+
+    try:
+        restarted = restart_l03e(session, l03e_config)
+    except requests.RequestException as exc:
+        LOGGER.error("L-03E restart request failed error=%s", exc)
+        return False
+
+    if restarted:
+        state.last_restart_monotonic = now_monotonic
+        state.consecutive_wan_failures = 0
+        return True
+
+    return False
+
+
+def l03e_restart_loop(
+    stop_event: threading.Event,
+    l03e_config: L03ERestartConfig,
+) -> None:
+    state = L03ERestartState()
+    session = requests.Session()
+    try:
+        while not stop_event.is_set():
+            check_l03e_once(session, l03e_config, state, time.monotonic())
+            stop_event.wait(l03e_config.check_interval_sec)
+    finally:
+        session.close()
+
+
 def heartbeat_loop(
     stop_event: threading.Event,
     config: Config,
@@ -307,6 +600,16 @@ def main() -> None:
         config.cooldown_sec,
         config.api_base_url,
     )
+    if config.l03e_restart_config is None:
+        LOGGER.info("L-03E restart owner disabled for device_id=%s", config.device_id)
+    else:
+        LOGGER.info(
+            "L-03E restart owner enabled base_url=%s check_interval=%ss threshold=%s cooldown=%ss",
+            config.l03e_restart_config.base_url,
+            config.l03e_restart_config.check_interval_sec,
+            config.l03e_restart_config.consecutive_failures_before_restart,
+            config.l03e_restart_config.restart_cooldown_sec,
+        )
 
     sensor = MotionSensor(config.gpio_pin)
     state = MotionState(
@@ -347,6 +650,15 @@ def main() -> None:
             daemon=True,
         ),
     ]
+    if config.l03e_restart_config is not None:
+        threads.append(
+            threading.Thread(
+                target=l03e_restart_loop,
+                name="l03e-restart-loop",
+                args=(stop_event, config.l03e_restart_config),
+                daemon=True,
+            )
+        )
     for thread in threads:
         thread.start()
 
