@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Activity as ActivityIcon, ArrowLeft } from "lucide-react";
 import {
@@ -279,13 +279,14 @@ function ActivitiesPageContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const chartViewportRef = useRef<HTMLDivElement | null>(null);
   const selectedDevice = useMemo(
     () => resolveDeviceFromQueryParam(searchParams.get("deviceId")),
     [searchParams],
   );
   const [selectedPreset, setSelectedPreset] =
     useState<ActivityRangePreset>("6h");
+  const [chartViewportElement, setChartViewportElement] =
+    useState<HTMLDivElement | null>(null);
   const [chartViewportWidth, setChartViewportWidth] = useState<number>(0);
   const [records, setRecords] = useState<Activity[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -394,7 +395,7 @@ function ActivitiesPageContent() {
   };
 
   useEffect(() => {
-    const element = chartViewportRef.current;
+    const element = chartViewportElement;
     if (!element) {
       return;
     }
@@ -415,14 +416,14 @@ function ActivitiesPageContent() {
     return () => {
       observer.disconnect();
     };
-  }, [chartData.length]);
+  }, [chartViewportElement]);
 
   useEffect(() => {
     if (!isScrollableChart) {
       return;
     }
 
-    const element = chartViewportRef.current;
+    const element = chartViewportElement;
     if (!element) {
       return;
     }
@@ -436,6 +437,7 @@ function ActivitiesPageContent() {
     };
   }, [
     chartWidth,
+    chartViewportElement,
     displayChartData.length,
     isScrollableChart,
     selectedDevice.id,
@@ -551,7 +553,7 @@ function ActivitiesPageContent() {
                 </p>
               ) : (
                 <div
-                  ref={chartViewportRef}
+                  ref={setChartViewportElement}
                   className={
                     isScrollableChart
                       ? "h-[360px] w-full overflow-x-auto overflow-y-hidden pb-2"
