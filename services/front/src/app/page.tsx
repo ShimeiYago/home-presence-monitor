@@ -18,7 +18,7 @@ import {
 } from "@/lib/device-api";
 import { DEVICES } from "@/lib/devices";
 import { resolveApiConfig, type ApiConfig } from "@/lib/runtime-config";
-import { formatJstDateTimeMinute, minutesSince } from "@/lib/time";
+import { minutesSince } from "@/lib/time";
 
 type SourceIpSummary = GetDeviceSourceIpResponse | null;
 
@@ -68,6 +68,9 @@ const buildHouseMotionRange = () => {
     ),
   };
 };
+
+const buildHouseMotionRuleText = (): string =>
+  `直近${MONITOR_THRESHOLDS.sensorActivityWindowMinutes}分で${MONITOR_THRESHOLDS.sensorMotionCountHealthyThreshold}回以上で生存`;
 
 const summarizeHouseMotion = (
   recordsByDevice: ActivityRecord[][],
@@ -323,7 +326,7 @@ export default function Home() {
   }, [heartbeatSummaries, isLoading]);
 
   const houseMotionStatus = useMemo<CardStatus>(() => {
-    const ruleText = `直近${MONITOR_THRESHOLDS.sensorActivityWindowMinutes}分の合計 ${MONITOR_THRESHOLDS.sensorMotionCountHealthyThreshold}回以上で正常`;
+    const ruleText = buildHouseMotionRuleText();
 
     if (isLoading && !houseMotionSummary) {
       return {
@@ -344,7 +347,7 @@ export default function Home() {
     return {
       label: houseMotionSummary.isHealthy ? "正常" : "異常あり",
       isAlert: !houseMotionSummary.isHealthy,
-      detail: `直近${MONITOR_THRESHOLDS.sensorActivityWindowMinutes}分 ${houseMotionSummary.lastWindowMotionTotal}回 / 連続非検出 ${houseMotionSummary.consecutiveNonDetectionCount}/${MONITOR_THRESHOLDS.sensorConsecutiveNonDetectionAlertThreshold}回（${ruleText}）`,
+      detail: `直近${MONITOR_THRESHOLDS.sensorActivityWindowMinutes}分 ${houseMotionSummary.lastWindowMotionTotal}回 / 生存の連続非成立 ${houseMotionSummary.consecutiveNonDetectionCount}/${MONITOR_THRESHOLDS.sensorConsecutiveNonDetectionAlertThreshold}回（${ruleText}）`,
     };
   }, [houseMotionSummary, isLoading]);
 

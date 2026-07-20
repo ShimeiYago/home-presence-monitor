@@ -2,8 +2,8 @@ export const MONITOR_THRESHOLDS = {
   heartbeatStaleMinutes: 11,
   sensorMotionCountAlertThreshold: 0,
   sensorActivityWindowMinutes: 10,
-  sensorMotionCountHealthyThreshold: 3,
-  sensorConsecutiveNonDetectionAlertThreshold: 6,
+  sensorMotionCountHealthyThreshold: 2,
+  sensorConsecutiveNonDetectionAlertThreshold: 7,
   notificationQuietHoursStartHourJst: 9,
   notificationQuietHoursEndHourJst: 23,
 } as const;

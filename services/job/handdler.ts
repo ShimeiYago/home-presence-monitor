@@ -83,6 +83,9 @@ const minutesSince = (value: string, nowMs: number): number => {
 const floorToIntervalMs = (valueMs: number, intervalMs: number): number =>
   Math.floor(valueMs / intervalMs) * intervalMs;
 
+const buildHouseMotionRuleText = (): string =>
+  `直近${MONITOR_THRESHOLDS.sensorActivityWindowMinutes}分で${MONITOR_THRESHOLDS.sensorMotionCountHealthyThreshold}回以上で生存`;
+
 const isNotificationWindow = (now: Date): boolean => {
   const jstHour = (now.getUTCHours() + 9) % 24;
   return (
@@ -179,14 +182,15 @@ const evaluateHouseMotion = (params: {
   activityTotal: number;
 }): HouseMotionEvaluation => {
   const { previous, activityTotal } = params;
-  const sensorDetected =
+  const houseMotionRuleText = buildHouseMotionRuleText();
+  const aliveDetected =
     activityTotal >= MONITOR_THRESHOLDS.sensorMotionCountHealthyThreshold;
   const previousConsecutiveNonDetectionCount =
     previous?.consecutiveNonDetectionCount ??
     (previous?.isHealthy === false
       ? MONITOR_THRESHOLDS.sensorConsecutiveNonDetectionAlertThreshold
       : 0);
-  const consecutiveNonDetectionCount = sensorDetected
+  const consecutiveNonDetectionCount = aliveDetected
     ? 0
     : previousConsecutiveNonDetectionCount + 1;
   const isHealthy =
@@ -203,7 +207,7 @@ const evaluateHouseMotion = (params: {
     isHealthy,
     reason: isHealthy
       ? "正常"
-      : `家全体のセンサー記録: 直近${MONITOR_THRESHOLDS.sensorActivityWindowMinutes}分の合計 ${activityTotal}回（生存条件 ${MONITOR_THRESHOLDS.sensorMotionCountHealthyThreshold}回以上 / 連続非検出 ${consecutiveNonDetectionCount}/${MONITOR_THRESHOLDS.sensorConsecutiveNonDetectionAlertThreshold}回）`,
+      : `家全体のセンサー記録: 直近${MONITOR_THRESHOLDS.sensorActivityWindowMinutes}分の合計 ${activityTotal}回（${houseMotionRuleText} / 生存の連続非成立 ${consecutiveNonDetectionCount}/${MONITOR_THRESHOLDS.sensorConsecutiveNonDetectionAlertThreshold}回）`,
     activityTotal,
     consecutiveNonDetectionCount,
     transitionVersion,

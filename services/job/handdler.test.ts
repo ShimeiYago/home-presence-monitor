@@ -184,13 +184,13 @@ describe("monitor job handler", () => {
     vi.unstubAllGlobals();
   });
 
-  it("does not notify on the fifth consecutive house-level non-detection", async () => {
+  it("does not notify on the sixth consecutive house-level non-detection", async () => {
     mockScenario({
       previousStates: {
         [HOUSE_MOTION_MONITOR_STATE_ID]: {
           deviceId: HOUSE_MOTION_MONITOR_STATE_ID,
           isHealthy: true,
-          consecutiveNonDetectionCount: 4,
+          consecutiveNonDetectionCount: 5,
         },
       },
     });
@@ -203,19 +203,19 @@ describe("monitor job handler", () => {
       expect.objectContaining({
         deviceId: HOUSE_MOTION_MONITOR_STATE_ID,
         isHealthy: true,
-        consecutiveNonDetectionCount: 5,
+        consecutiveNonDetectionCount: 6,
         activityTotal: 0,
       }),
     );
   });
 
-  it("notifies abnormal on the sixth consecutive house-level non-detection", async () => {
+  it("notifies abnormal on the seventh consecutive house-level non-detection", async () => {
     mockScenario({
       previousStates: {
         [HOUSE_MOTION_MONITOR_STATE_ID]: {
           deviceId: HOUSE_MOTION_MONITOR_STATE_ID,
           isHealthy: true,
-          consecutiveNonDetectionCount: 5,
+          consecutiveNonDetectionCount: 6,
         },
       },
     });
@@ -228,13 +228,47 @@ describe("monitor job handler", () => {
       expect.objectContaining({
         deviceId: HOUSE_MOTION_MONITOR_STATE_ID,
         isHealthy: false,
-        consecutiveNonDetectionCount: 6,
+        consecutiveNonDetectionCount: 7,
         activityTotal: 0,
       }),
     );
 
     const published = parsePublishedMessage(0);
     expect(published.content?.title).toBe("異常発生");
+    expect(published.content?.description).toContain("家全体");
+    expect(published.content?.description).toContain("直近10分で2回以上で生存");
+  });
+
+  it("notifies recovery when house motion becomes alive after an abnormal state", async () => {
+    mockScenario({
+      previousStates: {
+        [HOUSE_MOTION_MONITOR_STATE_ID]: {
+          deviceId: HOUSE_MOTION_MONITOR_STATE_ID,
+          isHealthy: false,
+          consecutiveNonDetectionCount: 7,
+        },
+      },
+      activities: {
+        device01: [makeActivity("device01", 1)],
+        device02: [makeActivity("device02", 1)],
+      },
+    });
+
+    await handler({} as never, {} as never, vi.fn());
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(findEvaluation(HOUSE_MOTION_MONITOR_STATE_ID)).toEqual(
+      expect.objectContaining({
+        deviceId: HOUSE_MOTION_MONITOR_STATE_ID,
+        isHealthy: true,
+        consecutiveNonDetectionCount: 0,
+        activityTotal: 2,
+      }),
+    );
+
+    const published = parsePublishedMessage(0);
+    expect(published.content?.title).toBe("正常復旧");
     expect(published.content?.description).toContain("家全体");
   });
 
@@ -244,12 +278,12 @@ describe("monitor job handler", () => {
         [HOUSE_MOTION_MONITOR_STATE_ID]: {
           deviceId: HOUSE_MOTION_MONITOR_STATE_ID,
           isHealthy: true,
-          consecutiveNonDetectionCount: 5,
+          consecutiveNonDetectionCount: 6,
         },
       },
       activities: {
         device01: [],
-        device02: [makeActivity("device02", 3)],
+        device02: [makeActivity("device02", 2)],
       },
     });
 
@@ -262,7 +296,7 @@ describe("monitor job handler", () => {
         deviceId: HOUSE_MOTION_MONITOR_STATE_ID,
         isHealthy: true,
         consecutiveNonDetectionCount: 0,
-        activityTotal: 3,
+        activityTotal: 2,
       }),
     );
   });
@@ -273,7 +307,7 @@ describe("monitor job handler", () => {
         [HOUSE_MOTION_MONITOR_STATE_ID]: {
           deviceId: HOUSE_MOTION_MONITOR_STATE_ID,
           isHealthy: true,
-          consecutiveNonDetectionCount: 5,
+          consecutiveNonDetectionCount: 6,
         },
         device01: {
           deviceId: "device01",
@@ -310,7 +344,7 @@ describe("monitor job handler", () => {
         }),
       },
       activities: {
-        device02: [makeActivity("device02", 3)],
+        device02: [makeActivity("device02", 2)],
       },
     });
 
@@ -363,7 +397,7 @@ describe("monitor job handler", () => {
         [HOUSE_MOTION_MONITOR_STATE_ID]: {
           deviceId: HOUSE_MOTION_MONITOR_STATE_ID,
           isHealthy: true,
-          consecutiveNonDetectionCount: 5,
+          consecutiveNonDetectionCount: 6,
         },
       },
     });
@@ -375,9 +409,29 @@ describe("monitor job handler", () => {
     expect(findEvaluation(HOUSE_MOTION_MONITOR_STATE_ID)).toEqual(
       expect.objectContaining({
         isHealthy: false,
-        consecutiveNonDetectionCount: 6,
+        consecutiveNonDetectionCount: 7,
       }),
     );
+  });
+
+  it("sends notifications during the 23 JST hour", async () => {
+    vi.setSystemTime(new Date("2026-06-07T14:10:00.000Z"));
+
+    mockScenario({
+      previousStates: {
+        [HOUSE_MOTION_MONITOR_STATE_ID]: {
+          deviceId: HOUSE_MOTION_MONITOR_STATE_ID,
+          isHealthy: true,
+          consecutiveNonDetectionCount: 6,
+        },
+      },
+    });
+
+    await handler({} as never, {} as never, vi.fn());
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(parsePublishedMessage(0).content?.title).toBe("異常発生");
   });
 
   it("sends abnormal and recovery notifications separately when both happen in one run", async () => {
@@ -391,7 +445,7 @@ describe("monitor job handler", () => {
         [HOUSE_MOTION_MONITOR_STATE_ID]: {
           deviceId: HOUSE_MOTION_MONITOR_STATE_ID,
           isHealthy: false,
-          consecutiveNonDetectionCount: 6,
+          consecutiveNonDetectionCount: 7,
         },
       },
       heartbeats: {
@@ -401,7 +455,7 @@ describe("monitor job handler", () => {
         }),
       },
       activities: {
-        device02: [makeActivity("device02", 3)],
+        device02: [makeActivity("device02", 2)],
       },
     });
 
@@ -423,7 +477,7 @@ describe("monitor job handler", () => {
         [HOUSE_MOTION_MONITOR_STATE_ID]: {
           deviceId: HOUSE_MOTION_MONITOR_STATE_ID,
           isHealthy: true,
-          consecutiveNonDetectionCount: 5,
+          consecutiveNonDetectionCount: 6,
         },
       },
     });
