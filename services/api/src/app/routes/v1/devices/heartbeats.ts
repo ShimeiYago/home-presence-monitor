@@ -18,7 +18,7 @@ import { parseJsonBody, parseQuery } from "src/app/lib/zod";
 import { parseConfiguredDevice } from "./common";
 
 export const deviceHeartbeatsRoute = new Hono();
-const HEARTBEAT_TTL_SECONDS = 60 * 60 * 24;
+const HEARTBEAT_TTL_SECONDS = 60 * 60 * 24 * 30;
 const iso8601Schema = z.string().datetime({ offset: true });
 const getHeartbeatsQuerySchema = z.object({
   from: iso8601Schema,

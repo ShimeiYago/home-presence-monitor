@@ -17,7 +17,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import quote
 
 import requests
@@ -524,53 +524,66 @@ def l03e_restart_loop(
         session.close()
 
 
+def create_api_session(config: Config) -> requests.Session:
+    session = requests.Session()
+    if config.api_key is not None:
+        session.headers.update({config.api_key_header: config.api_key})
+    return session
+
+
 def heartbeat_loop(
     stop_event: threading.Event,
     config: Config,
-    session: requests.Session,
 ) -> None:
+    session = create_api_session(config)
     next_run_monotonic = time.monotonic()
-    while not stop_event.is_set():
-        payload = {"timestamp": to_iso8601(utc_now())}
-        post_json(
-            session,
-            config.heartbeat_url,
-            payload,
-            config.request_timeout_sec,
-            config.post_max_attempts,
-            config.post_retry_backoff_sec,
-        )
+    try:
+        while not stop_event.is_set():
+            payload = {"timestamp": to_iso8601(utc_now())}
+            post_json(
+                session,
+                config.heartbeat_url,
+                payload,
+                config.request_timeout_sec,
+                config.post_max_attempts,
+                config.post_retry_backoff_sec,
+            )
 
-        next_run_monotonic += config.heartbeat_interval_sec
-        wait_sec = max(0.0, next_run_monotonic - time.monotonic())
-        stop_event.wait(wait_sec)
+            next_run_monotonic += config.heartbeat_interval_sec
+            wait_sec = max(0.0, next_run_monotonic - time.monotonic())
+            stop_event.wait(wait_sec)
+    finally:
+        session.close()
 
 
 def activity_window_loop(
     stop_event: threading.Event,
     config: Config,
     state: MotionState,
-    session: requests.Session,
 ) -> None:
-    while not stop_event.is_set():
-        wait_sec = state.seconds_until_next_window(config.motion_window_sec)
-        if wait_sec > 0 and stop_event.wait(wait_sec):
-            break
+    session = create_api_session(config)
+    try:
+        while not stop_event.is_set():
+            wait_sec = state.seconds_until_next_window(config.motion_window_sec)
+            if wait_sec > 0 and stop_event.wait(wait_sec):
+                break
 
-        window_start, window_end, count_to_send = state.close_window(config.motion_window_sec)
-        payload = {
-            "windowStart": window_start,
-            "windowEnd": window_end,
-            "motionCount": count_to_send,
-        }
-        post_json(
-            session,
-            config.activities_url,
-            payload,
-            config.request_timeout_sec,
-            config.post_max_attempts,
-            config.post_retry_backoff_sec,
-        )
+            window_start, window_end, count_to_send = state.close_window(config.motion_window_sec)
+            payload = {
+                "windowStart": window_start,
+                "windowEnd": window_end,
+                "motionCount": count_to_send,
+            }
+            post_json(
+                session,
+                config.activities_url,
+                payload,
+                config.request_timeout_sec,
+                config.post_max_attempts,
+                config.post_retry_backoff_sec,
+            )
+    finally:
+        session.close()
 
 
 def configure_logging(level_name: str) -> None:
@@ -579,6 +592,44 @@ def configure_logging(level_name: str) -> None:
         level=level,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
+
+
+class WorkerFailure:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.name: Optional[str] = None
+        self.error: Optional[BaseException] = None
+
+    def record(self, name: str, error: BaseException) -> None:
+        with self.lock:
+            if self.error is None:
+                self.name = name
+                self.error = error
+
+    def get(self) -> tuple[Optional[str], Optional[BaseException]]:
+        with self.lock:
+            return self.name, self.error
+
+
+def run_worker(
+    name: str,
+    stop_event: threading.Event,
+    failures: WorkerFailure,
+    target: Callable[[], None],
+) -> None:
+    try:
+        target()
+    except BaseException as exc:
+        failures.record(name, exc)
+        LOGGER.exception("worker failed name=%s", name)
+        stop_event.set()
+        return
+
+    if not stop_event.is_set():
+        error = RuntimeError(f"worker exited unexpectedly: {name}")
+        failures.record(name, error)
+        LOGGER.error("worker exited unexpectedly name=%s", name)
+        stop_event.set()
 
 
 def main() -> None:
@@ -600,6 +651,8 @@ def main() -> None:
         config.cooldown_sec,
         config.api_base_url,
     )
+    if config.api_key is not None:
+        LOGGER.info("api key header configured: %s", config.api_key_header)
     if config.l03e_restart_config is None:
         LOGGER.info("L-03E restart owner disabled for device_id=%s", config.device_id)
     else:
@@ -617,10 +670,7 @@ def main() -> None:
         cooldown_sec=config.cooldown_sec,
     )
     stop_event = threading.Event()
-    session = requests.Session()
-    if config.api_key is not None:
-        session.headers.update({config.api_key_header: config.api_key})
-        LOGGER.info("api key header configured: %s", config.api_key_header)
+    worker_failures = WorkerFailure()
 
     def on_motion() -> None:
         counted, total, now_iso = state.on_motion(time.monotonic(), utc_now())
@@ -638,25 +688,37 @@ def main() -> None:
 
     threads = [
         threading.Thread(
-            target=heartbeat_loop,
+            target=run_worker,
             name="heartbeat-loop",
-            args=(stop_event, config, session),
-            daemon=True,
+            args=(
+                "heartbeat-loop",
+                stop_event,
+                worker_failures,
+                lambda: heartbeat_loop(stop_event, config),
+            ),
         ),
         threading.Thread(
-            target=activity_window_loop,
+            target=run_worker,
             name="activity-window-loop",
-            args=(stop_event, config, state, session),
-            daemon=True,
+            args=(
+                "activity-window-loop",
+                stop_event,
+                worker_failures,
+                lambda: activity_window_loop(stop_event, config, state),
+            ),
         ),
     ]
     if config.l03e_restart_config is not None:
         threads.append(
             threading.Thread(
-                target=l03e_restart_loop,
+                target=run_worker,
                 name="l03e-restart-loop",
-                args=(stop_event, config.l03e_restart_config),
-                daemon=True,
+                args=(
+                    "l03e-restart-loop",
+                    stop_event,
+                    worker_failures,
+                    lambda: l03e_restart_loop(stop_event, config.l03e_restart_config),
+                ),
             )
         )
     for thread in threads:
@@ -664,13 +726,20 @@ def main() -> None:
 
     try:
         while not stop_event.is_set():
+            failed_name, failed_error = worker_failures.get()
+            if failed_error is not None:
+                raise RuntimeError(f"worker failed: {failed_name}") from failed_error
+
             stop_event.wait(1.0)
     finally:
         stop_event.set()
         for thread in threads:
             thread.join(timeout=2.0)
-        session.close()
         LOGGER.info("monitor stopped")
+
+    failed_name, failed_error = worker_failures.get()
+    if failed_error is not None:
+        raise RuntimeError(f"worker failed: {failed_name}") from failed_error
 
 
 if __name__ == "__main__":
