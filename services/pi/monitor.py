@@ -15,7 +15,7 @@ import os
 import signal
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import quote
@@ -44,6 +44,12 @@ LOG_LEVEL = "INFO"
 SHARED_DEVICES_CONFIG_PATH = (
     Path(__file__).resolve().parents[2] / "packages" / "config" / "devices.json"
 )
+JST = timezone(timedelta(hours=9))
+DAILY_RESTART_WINDOW_SEC = 30 * 60
+
+
+def daily_restart_state_path() -> Path:
+    return Path.home() / ".local/state/home-presence-monitor/l03e-restart.json"
 
 
 def utc_now() -> datetime:
@@ -93,6 +99,8 @@ class L03ERestartConfig:
     consecutive_failures_before_restart: int
     restart_cooldown_sec: int
     request_timeout_sec: int
+    daily_restart_enabled: bool = False
+    daily_restart_time_jst: str = "05:00"
 
     @property
     def login_apply_url(self) -> str:
@@ -116,9 +124,80 @@ class L03ERestartConfig:
 
 
 @dataclasses.dataclass
+class DailyRestartState:
+    path: Path = dataclasses.field(default_factory=daily_restart_state_path)
+    last_handled_date: Optional[str] = None
+    last_attempt_at: Optional[datetime] = None
+    disabled: bool = False
+
+
+def load_daily_restart_state(path: Optional[Path] = None) -> DailyRestartState:
+    state = DailyRestartState(
+        path=path if path is not None else daily_restart_state_path()
+    )
+    try:
+        state.path.with_suffix(".json.tmp").unlink(missing_ok=True)
+        try:
+            raw = json.loads(state.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return state
+        if not isinstance(raw, dict):
+            raise ValueError("state must be an object")
+        handled = raw["lastHandledDateJst"]
+        if (
+            not isinstance(handled, str)
+            or date.fromisoformat(handled).isoformat() != handled
+        ):
+            raise ValueError("invalid lastHandledDateJst")
+        attempt = raw["lastAttemptAtUtc"]
+        if attempt is not None:
+            parsed = datetime.fromisoformat(attempt.replace("Z", "+00:00"))
+            if parsed.utcoffset() != timedelta(0):
+                raise ValueError("lastAttemptAtUtc must be UTC")
+            state.last_attempt_at = parsed
+        state.last_handled_date = handled
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        state.disabled = True
+        LOGGER.error("L-03E daily restart disabled: state load/cleanup failed")
+    return state
+
+
+def save_daily_restart_state(state: DailyRestartState) -> bool:
+    try:
+        state.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = state.path.with_suffix(".json.tmp")
+        with temporary_path.open("w", encoding="utf-8") as output:
+            json.dump(
+                {
+                    "lastHandledDateJst": state.last_handled_date,
+                    "lastAttemptAtUtc": (
+                        state.last_attempt_at.isoformat()
+                        if state.last_attempt_at is not None else None
+                    ),
+                },
+                output,
+            )
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_path, state.path)
+        # Persist the directory entry as well as the contents before sending HTTP.
+        directory_fd = os.open(state.path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError:
+        state.disabled = True
+        LOGGER.error("L-03E daily restart disabled: state save failed")
+        return False
+    return True
+
+
+@dataclasses.dataclass
 class L03ERestartState:
     consecutive_wan_failures: int = 0
     last_restart_monotonic: Optional[float] = None
+    daily: Optional[DailyRestartState] = None
 
 
 def load_l03e_restart_config(
@@ -147,6 +226,23 @@ def load_l03e_restart_config(
         require_str(url, f"l03e.wanCheckUrls[{index}]")
         for index, url in enumerate(raw_wan_check_urls)
     )
+
+    daily_enabled = raw_l03e.get("dailyRestartEnabled", False)
+    daily_time = raw_l03e.get("dailyRestartTimeJst", "05:00")
+    if not isinstance(daily_enabled, bool):
+        raise ValueError("l03e.dailyRestartEnabled must be a boolean")
+    if (
+        not isinstance(daily_time, str)
+        or len(daily_time) != 5
+        or daily_time[2] != ":"
+        or not daily_time[:2].isascii()
+        or not daily_time[:2].isdigit()
+        or not daily_time[3:].isascii()
+        or not daily_time[3:].isdigit()
+        or int(daily_time[:2]) > 23
+        or int(daily_time[3:]) > 59
+    ):
+        raise ValueError("l03e.dailyRestartTimeJst must be HH:MM")
 
     return L03ERestartConfig(
         base_url=require_str(raw_l03e.get("baseUrl"), "l03e.baseUrl").rstrip("/"),
@@ -182,6 +278,8 @@ def load_l03e_restart_config(
             raw_l03e.get("requestTimeoutSec"),
             "l03e.requestTimeoutSec",
         ),
+        daily_restart_enabled=daily_enabled,
+        daily_restart_time_jst=daily_time,
     )
 
 
@@ -443,8 +541,96 @@ def restart_l03e(
         )
         return False
 
-    LOGGER.warning("L-03E restart triggered via profile_apply")
+    LOGGER.warning(
+        "L-03E restart request accepted via profile_apply; recovery not verified"
+    )
     return True
+
+
+def restart_in_cooldown(
+    config: L03ERestartConfig,
+    state: L03ERestartState,
+    now_monotonic: float,
+    now: datetime,
+) -> bool:
+    if (
+        state.last_restart_monotonic is not None
+        and now_monotonic - state.last_restart_monotonic < config.restart_cooldown_sec
+    ):
+        return True
+    daily_attempt = state.daily.last_attempt_at if state.daily else None
+    return (
+        daily_attempt is not None
+        and (now - daily_attempt).total_seconds() < config.restart_cooldown_sec
+    )
+
+
+def check_daily_restart_once(
+    session: requests.Session,
+    config: L03ERestartConfig,
+    state: L03ERestartState,
+    now_monotonic: float,
+    now: datetime,
+) -> Optional[bool]:
+    """Return None if not handled; otherwise skip emergency logic for this tick."""
+    daily = state.daily
+    if not config.daily_restart_enabled or daily is None or daily.disabled:
+        return None
+    now_jst = now.astimezone(JST)
+    hour, minute = map(int, config.daily_restart_time_jst.split(":"))
+    scheduled = now_jst.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if now_jst < scheduled:
+        scheduled -= timedelta(days=1)
+    if not 0 <= (now_jst - scheduled).total_seconds() < DAILY_RESTART_WINDOW_SEC:
+        return None
+    scheduled_date = scheduled.date().isoformat()
+    if (
+        daily.last_handled_date is not None
+        and scheduled_date <= daily.last_handled_date
+    ):
+        return None
+
+    cooldown = restart_in_cooldown(config, state, now_monotonic, now)
+    previous_date, previous_attempt = daily.last_handled_date, daily.last_attempt_at
+    daily.last_handled_date = scheduled_date
+    if not cooldown:
+        daily.last_attempt_at = now.astimezone(timezone.utc)
+    if not save_daily_restart_state(daily):
+        daily.last_handled_date, daily.last_attempt_at = previous_date, previous_attempt
+        return None
+    if cooldown:
+        LOGGER.info(
+            "L-03E daily restart skipped reason=cooldown date_jst=%s", scheduled_date
+        )
+        return False
+
+    # Reserve before even the reachability GET: unreachable/ambiguous attempts
+    # consume the day's slot and suppress emergency restarts for 30 minutes.
+    state.last_restart_monotonic = now_monotonic
+    state.consecutive_wan_failures = 0
+    LOGGER.warning(
+        "L-03E restart attempt reason=daily date_jst=%s timestamp=%s",
+        scheduled_date,
+        now.isoformat(),
+    )
+    if not is_url_reachable(session, config.login_page_url, config.request_timeout_sec):
+        LOGGER.warning(
+            "L-03E daily restart failed reason=router_unreachable; no retry today"
+        )
+        return False
+    try:
+        accepted = restart_l03e(session, config)
+    except requests.RequestException as exc:
+        # Do not log exception contents, which can contain request credentials.
+        LOGGER.warning(
+            "L-03E daily restart request failed error_type=%s; no retry today",
+            type(exc).__name__,
+        )
+        return False
+    LOGGER.info(
+        "L-03E daily restart request result accepted=%s; recovery not verified", accepted
+    )
+    return accepted
 
 
 def check_l03e_once(
@@ -452,7 +638,15 @@ def check_l03e_once(
     l03e_config: L03ERestartConfig,
     state: L03ERestartState,
     now_monotonic: float,
+    now: Optional[datetime] = None,
 ) -> bool:
+    now = now if now is not None else utc_now()
+    daily_result = check_daily_restart_once(
+        session, l03e_config, state, now_monotonic, now
+    )
+    if daily_result is not None:
+        return daily_result
+
     if not is_url_reachable(
         session,
         l03e_config.login_page_url,
@@ -484,22 +678,20 @@ def check_l03e_once(
     ):
         return False
 
-    if (
-        state.last_restart_monotonic is not None
-        and now_monotonic - state.last_restart_monotonic
-        < l03e_config.restart_cooldown_sec
-    ):
+    if restart_in_cooldown(l03e_config, state, now_monotonic, now):
         LOGGER.warning(
-            "L-03E restart skipped during cooldown elapsed=%.1fs cooldown=%ss",
-            now_monotonic - state.last_restart_monotonic,
+            "L-03E restart skipped reason=cooldown cooldown=%ss",
             l03e_config.restart_cooldown_sec,
         )
         return False
 
+    LOGGER.warning(
+        "L-03E restart attempt reason=wan_failure timestamp=%s", now.isoformat()
+    )
     try:
         restarted = restart_l03e(session, l03e_config)
     except requests.RequestException as exc:
-        LOGGER.error("L-03E restart request failed error=%s", exc)
+        LOGGER.error("L-03E restart request failed error_type=%s", type(exc).__name__)
         return False
 
     if restarted:
@@ -514,7 +706,14 @@ def l03e_restart_loop(
     stop_event: threading.Event,
     l03e_config: L03ERestartConfig,
 ) -> None:
-    state = L03ERestartState()
+    state = L03ERestartState(daily=load_daily_restart_state())
+    LOGGER.info(
+        "L-03E daily restart configuration enabled=%s time_jst=%s window_sec=%s state_available=%s",
+        l03e_config.daily_restart_enabled,
+        l03e_config.daily_restart_time_jst,
+        DAILY_RESTART_WINDOW_SEC,
+        not state.daily.disabled,
+    )
     session = requests.Session()
     try:
         while not stop_event.is_set():
